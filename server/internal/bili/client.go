@@ -1,9 +1,13 @@
 package bili
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +20,40 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+const (
+	AppKey    = "4409e2ce8ffd12b8"
+	AppSecret = "59b43e04ad6965f34319062b478f83dd"
+)
+
+// signParams 对参数进行签名（TV端APP登录需要）
+func signParams(params map[string]string) map[string]string {
+	// 按key排序
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// 构建查询字符串
+	var query strings.Builder
+	for _, k := range keys {
+		if query.Len() > 0 {
+			query.WriteString("&")
+		}
+		query.WriteString(k)
+		query.WriteString("=")
+		query.WriteString(params[k])
+	}
+
+	// 添加AppSecret并计算MD5
+	query.WriteString(AppSecret)
+	hash := md5.Sum([]byte(query.String()))
+	sign := hex.EncodeToString(hash[:])
+
+	params["sign"] = sign
+	return params
 }
 
 type BiliClient struct {
@@ -402,6 +440,16 @@ type QRCodePollResponse struct {
 		RefreshToken string `json:"refresh_token"`
 		Code         int    `json:"code"`
 		Message      string `json:"message"`
+		// TV端返回的cookie信息
+		CookieInfo struct {
+			Cookies []struct {
+				Name     string `json:"name"`
+				Value    string `json:"value"`
+				HttpOnly int    `json:"http_only"`
+				Expires  int64  `json:"expires"`
+				Secure   int    `json:"secure"`
+			} `json:"cookies"`
+		} `json:"cookie_info"`
 	} `json:"data"`
 	Status bool `json:"status"`
 }
@@ -431,6 +479,116 @@ func GenerateWebQRCode() (*QRCodeResponse, error) {
 	qrResp.Data.AuthCode = qrResp.Data.OauthKey
 
 	return &qrResp, nil
+}
+
+// GenerateTVQRCode 生成TV端二维码
+func GenerateTVQRCode() (*QRCodeResponse, error) {
+	params := map[string]string{
+		"appkey":   AppKey,
+		"local_id": "0",
+		"ts":       "0",
+	}
+
+	params = signParams(params)
+	apiURL := "https://passport.bilibili.com/x/passport-tv-login/qrcode/auth_code"
+
+	log.Printf("[TV_QR] 请求URL: %s", apiURL)
+	log.Printf("[TV_QR] 请求参数: appkey=%s, local_id=%s, ts=%s, sign=%s",
+		params["appkey"], params["local_id"], params["ts"], params["sign"])
+
+	var qrResp QRCodeResponse
+	client := req.C().ImpersonateChrome()
+	resp, err := client.R().
+		SetFormDataFromValues(url.Values{
+			"appkey":   {params["appkey"]},
+			"local_id": {params["local_id"]},
+			"ts":       {params["ts"]},
+			"sign":     {params["sign"]},
+		}).
+		Post(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("请求二维码失败: %w", err)
+	}
+
+	rawBody := resp.String()
+	log.Printf("[TV_QR_DEBUG] 原始响应: %s", rawBody)
+
+	if err := resp.UnmarshalJson(&qrResp); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if qrResp.Code != 0 {
+		return nil, fmt.Errorf("生成TV端二维码失败 code=%d msg=%s", qrResp.Code, qrResp.Message)
+	}
+
+	log.Printf("[TV_QR] 生成成功 - url: %s, auth_code: %s", qrResp.Data.URL, qrResp.Data.AuthCode)
+
+	return &qrResp, nil
+}
+
+// PollTVQRCodeStatus 轮询TV端二维码状态
+func PollTVQRCodeStatus(authCode string) (*QRCodePollResponse, error) {
+	params := map[string]string{
+		"appkey":    AppKey,
+		"auth_code": authCode,
+		"local_id":  "0",
+		"ts":        "0",
+	}
+
+	params = signParams(params)
+	apiURL := "https://passport.bilibili.com/x/passport-tv-login/qrcode/poll"
+
+	log.Printf("[TV_POLL] 轮询 authCode: %s", authCode)
+
+	var pollResp QRCodePollResponse
+	client := req.C().ImpersonateChrome()
+	resp, err := client.R().
+		SetFormDataFromValues(url.Values{
+			"appkey":    {params["appkey"]},
+			"auth_code": {params["auth_code"]},
+			"local_id":  {params["local_id"]},
+			"ts":        {params["ts"]},
+			"sign":      {params["sign"]},
+		}).
+		Post(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("轮询状态失败: %w", err)
+	}
+
+	rawBody := resp.String()
+	log.Printf("[TV_POLL_DEBUG] 原始响应: %s", rawBody)
+
+	if err := resp.UnmarshalJson(&pollResp); err != nil {
+		return nil, fmt.Errorf("解析轮询响应失败: %w", err)
+	}
+
+	log.Printf("[TV_POLL] 原始响应 - code=%d, message=%s, data.code=%d",
+		pollResp.Code, pollResp.Message, pollResp.Data.Code)
+
+	// TV端的状态码在顶层code字段
+	if pollResp.Code == 0 {
+		// 登录成功
+		pollResp.Data.Code = 0
+		log.Printf("[TV_POLL] 登录成功")
+	} else {
+		// 将顶层code映射到data.code以保持统一接口
+		pollResp.Data.Code = pollResp.Code
+		switch pollResp.Code {
+		case 86038:
+			log.Printf("[TV_POLL] 二维码已过期")
+		case 86090:
+			log.Printf("[TV_POLL] 已扫码，等待确认")
+		case 86101, 86039:
+			// 86039: 二维码尚未确认 (未扫码)
+			// 86101: 未扫码
+			pollResp.Data.Code = 86101
+			log.Printf("[TV_POLL] 等待扫码")
+		default:
+			log.Printf("[TV_POLL] 未知状态 code=%d", pollResp.Code)
+		}
+	}
+
+	return &pollResp, nil
 }
 
 // PollWebQRCodeStatus 轮询Web端二维码状态
@@ -557,6 +715,46 @@ func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse, client *req
 	result := strings.Join(cookieStrs, "; ")
 	log.Printf("[WEB_COOKIE] 提取成功 - DedeUserID: %s, SESSDATA长度: %d, bili_jct长度: %d",
 		dedeUserID, len(sessdata), len(biliJct))
+
+	return result
+}
+
+// ExtractCookiesFromTVPollResponse 从TV端轮询响应中提取Cookie
+func ExtractCookiesFromTVPollResponse(pollResp *QRCodePollResponse) string {
+	if pollResp == nil || pollResp.Data.Code != 0 {
+		log.Printf("[TV_COOKIE] 登录未完成，跳过Cookie提取 - code=%d", pollResp.Data.Code)
+		return ""
+	}
+
+	// TV端登录成功后，从 cookie_info.cookies 数组中提取
+	if len(pollResp.Data.CookieInfo.Cookies) == 0 {
+		log.Printf("[TV_COOKIE] 错误：cookie_info.cookies为空")
+		return ""
+	}
+
+	// 构建 Cookie 字符串
+	cookieMap := make(map[string]string)
+	for _, cookie := range pollResp.Data.CookieInfo.Cookies {
+		cookieMap[cookie.Name] = cookie.Value
+	}
+
+	// 按顺序构建 Cookie（参考gobup项目）
+	cookieStrs := []string{
+		fmt.Sprintf("bili_jct=%s", cookieMap["bili_jct"]),
+		fmt.Sprintf("SESSDATA=%s", cookieMap["SESSDATA"]),
+		fmt.Sprintf("DedeUserID=%s", cookieMap["DedeUserID"]),
+	}
+
+	if val, ok := cookieMap["DedeUserID__ckMd5"]; ok && val != "" {
+		cookieStrs = append(cookieStrs, fmt.Sprintf("DedeUserID__ckMd5=%s", val))
+	}
+	if val, ok := cookieMap["sid"]; ok && val != "" {
+		cookieStrs = append(cookieStrs, fmt.Sprintf("sid=%s", val))
+	}
+
+	result := strings.Join(cookieStrs, "; ")
+	log.Printf("[TV_COOKIE] 提取成功 - DedeUserID: %s, SESSDATA长度: %d",
+		cookieMap["DedeUserID"], len(cookieMap["SESSDATA"]))
 
 	return result
 }

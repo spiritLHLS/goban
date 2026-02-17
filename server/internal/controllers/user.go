@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/imroc/req/v3"
 	"github.com/spiritlhl/goban/internal/bili"
 	"github.com/spiritlhl/goban/internal/database"
 	"github.com/spiritlhl/goban/internal/models"
@@ -59,16 +58,16 @@ func ListBiliUsers(c *gin.Context) {
 
 // LoginUser 生成B站登录二维码
 func LoginUser(c *gin.Context) {
-	log.Println("开始生成Web端二维码...")
+	log.Println("开始生成TV端二维码...")
 
-	qrResp, err := bili.GenerateWebQRCode()
+	qrResp, err := bili.GenerateTVQRCode()
 	if err != nil {
 		log.Printf("生成二维码失败: %v", err)
 		c.JSON(http.StatusOK, gin.H{"error": "生成二维码失败: " + err.Error()})
 		return
 	}
 
-	log.Printf("Web端二维码URL: %s, AuthCode: %s", qrResp.Data.URL, qrResp.Data.AuthCode)
+	log.Printf("TV端二维码URL: %s, AuthCode: %s", qrResp.Data.URL, qrResp.Data.AuthCode)
 
 	// 生成二维码图片
 	qrc, err := qrcode.NewWith(qrResp.Data.URL,
@@ -166,7 +165,7 @@ func LoginCheck(c *gin.Context) {
 	}
 
 	// 轮询登录状态
-	pollResp, err := bili.PollWebQRCodeStatus(session.AuthCode)
+	pollResp, err := bili.PollTVQRCodeStatus(session.AuthCode)
 	if err != nil {
 		log.Printf("[ERROR] 轮询失败: %v", err)
 		c.JSON(http.StatusOK, gin.H{
@@ -176,17 +175,13 @@ func LoginCheck(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[POLL] 轮询响应 - code: %d, status: %v, message: %s, url: %s", 
-		pollResp.Data.Code, pollResp.Status, pollResp.Data.Message, pollResp.Data.URL)
-
-	log.Printf("[DEBUG] 会话类型: %s, AuthCode: %s", session.Status, session.AuthCode)
+	log.Printf("[POLL] 轮询响应 - code: %d, message: %s", 
+		pollResp.Data.Code, pollResp.Message)
 
 	switch pollResp.Data.Code {
 	case 0: // 登录成功
-		// 创建HTTP客户端用于Cookie提取
-		client := req.C().ImpersonateChrome()
-		cookieStr := bili.ExtractCookiesFromWebPollResponse(pollResp, client)
-		log.Printf("[Web] 提取到的Cookie: %s", cookieStr)
+		cookieStr := bili.ExtractCookiesFromTVPollResponse(pollResp)
+		log.Printf("[TV] 提取到的Cookie: %s", cookieStr)
 		
 		if cookieStr == "" {
 			session.Status = "failed"
