@@ -22,7 +22,7 @@ docker pull spiritlhl/goban:latest
 # 运行容器
 docker run -d \
   --name goban \
-  -p 8080:8080 \
+  -p 38080:8080 \
   -e USERNAME=admin \
   -e PASSWORD=admin123 \
   -e TZ=Asia/Shanghai \
@@ -44,7 +44,7 @@ services:
     container_name: goban
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "38080:8080"
     environment:
       - PORT=8080
       - USERNAME=admin
@@ -85,7 +85,7 @@ docker build -t goban:local .
 # 运行容器
 docker run -d \
   --name goban \
-  -p 8080:8080 \
+  -p 38080:8080 \
   -e USERNAME=admin \
   -e PASSWORD=admin123 \
   -v $(pwd)/data:/app/data \
