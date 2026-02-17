@@ -26,7 +26,7 @@ docker run -d \
   -e USERNAME=admin \
   -e PASSWORD=admin123 \
   -e TZ=Asia/Shanghai \
-  -v $(pwd)/data:/app/data \
+  -v $(pwd)/goban:/app/data \
   --restart unless-stopped \
   spiritlhl/goban:latest
 ```
@@ -88,7 +88,7 @@ docker run -d \
   -p 38080:8080 \
   -e USERNAME=admin \
   -e PASSWORD=admin123 \
-  -v $(pwd)/data:/app/data \
+  -v $(pwd)/goban:/app/data \
   goban:local
 ```
 
