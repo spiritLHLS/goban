@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/imroc/req/v3"
 	"github.com/spiritlhl/goban/internal/bili"
 	"github.com/spiritlhl/goban/internal/database"
 	"github.com/spiritlhl/goban/internal/models"
