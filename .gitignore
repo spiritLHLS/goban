@@ -1,0 +1,17 @@
+# Backend artifacts
+server/goban
+server/goban.exe
+server/*.db
+server/*.sqlite*
+
+# Frontend artifacts  
+web/dist/
+web/node_modules/
+
+# Logs
+*.log
+
+# IDE
+.DS_Store
+.vscode/
+.idea/
