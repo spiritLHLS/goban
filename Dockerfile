@@ -8,7 +8,7 @@ COPY web/ ./
 RUN npm run build
 
 # 多阶段构建 - 构建后端
-FROM golang:1.21-alpine AS backend-builder
+FROM golang:1.24-alpine AS backend-builder
 
 # 安装构建依赖
 RUN apk add --no-cache gcc g++ musl-dev sqlite-dev
