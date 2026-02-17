@@ -51,7 +51,9 @@
               </el-button>
             </div>
             <div v-else class="qrcode-content">
-              <canvas ref="qrcodeCanvas" class="qrcode-canvas"></canvas>
+              <div class="qrcode-image">
+                <img :src="'data:image/png;base64,' + qrcodeUrl" alt="登录二维码" />
+              </div>
               <p class="login-status">{{ loginStatus }}</p>
               <el-button @click="cancelLogin" size="small">取消</el-button>
             </div>
@@ -89,10 +91,9 @@
 </template>
 
 <script setup>
-import { ref, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { userAPI } from '@/api'
-import QRCode from 'qrcode'
 
 const users = ref([])
 const loading = ref(false)
@@ -101,7 +102,6 @@ const loginTab = ref('qrcode')
 
 // 扫码登录
 const qrcodeUrl = ref('')
-const qrcodeCanvas = ref(null)
 const qrcodeLoading = ref(false)
 const loginStatus = ref('等待扫码...')
 let authKey = ''
@@ -113,13 +113,8 @@ const cookieLoginLoading = ref(false)
 
 // 监听对话框打开，自动生成二维码
 watch(showLoginDialog, (newVal) => {
-  if (newVal && loginTab.value === 'qrcode') {
-    // 对话框打开且在扫码登录标签，自动生成二维码
-    nextTick(() => {
-      if (!qrcodeUrl.value) {
-        generateQRCode()
-      }
-    })
+  if (newVal && loginTab.value === 'qrcode' && !qrcodeUrl.value) {
+    generateQRCode()
   } else if (!newVal) {
     // 对话框关闭，清理状态
     cancelLogin()
@@ -129,10 +124,7 @@ watch(showLoginDialog, (newVal) => {
 // 监听标签切换
 watch(loginTab, (newVal) => {
   if (newVal === 'qrcode' && showLoginDialog.value && !qrcodeUrl.value) {
-    // 切换到扫码登录且二维码未生成，自动生成
-    nextTick(() => {
-      generateQRCode()
-    })
+    generateQRCode()
   }
 })
 
@@ -170,21 +162,6 @@ const generateQRCode = async () => {
     
     authKey = data.key
     qrcodeUrl.value = data.image
-    
-    // 等待 DOM 更新后再生成二维码
-    await nextTick()
-    
-    // 生成二维码
-    if (qrcodeCanvas.value) {
-      await QRCode.toCanvas(qrcodeCanvas.value, data.image, {
-        width: 200,
-        margin: 2
-      })
-    } else {
-      ElMessage.error('二维码画布未准备好')
-      loginStatus.value = '二维码画布未准备好'
-      return
-    }
     
     startPolling()
   } catch (error) {
@@ -364,8 +341,20 @@ loadUsers()
   gap: 15px;
 }
 
-.qrcode-canvas {
-  border: 1px solid #dcdfe6;
+.qrcode-image {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+}
+
+.qrcode-image img {
+  width: 256px;
+  height: 256px;
+  display: block;
   border-radius: 4px;
 }
 

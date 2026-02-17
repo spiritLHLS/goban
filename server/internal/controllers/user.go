@@ -1,16 +1,37 @@
 package controllers
 
 import (
+	"bytes"
+	"encoding/base64"
+	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/imroc/req/v3"
 	"github.com/spiritlhl/goban/internal/bili"
 	"github.com/spiritlhl/goban/internal/database"
 	"github.com/spiritlhl/goban/internal/models"
+	"github.com/yeqown/go-qrcode/v2"
+	"github.com/yeqown/go-qrcode/writer/standard"
 )
+
+// nopCloser 包装 io.Writer 为 io.WriteCloser
+type nopCloser struct {
+	io.Writer
+}
+
+func (nopCloser) Close() error { return nil }
+
+// min 辅助函数
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // LoginSession 登录会话
 type LoginSession struct {
@@ -49,9 +70,45 @@ func LoginUser(c *gin.Context) {
 
 	log.Printf("Web端二维码URL: %s, AuthCode: %s", qrResp.Data.URL, qrResp.Data.AuthCode)
 
-	// 使用简单的方式生成二维码（避免使用第三方库）
-	// 直接返回URL让前端用库生成
-	sessionKey := qrResp.Data.AuthCode
+	// 生成二维码图片
+	qrc, err := qrcode.NewWith(qrResp.Data.URL,
+		qrcode.WithErrorCorrectionLevel(qrcode.ErrorCorrectionMedium),
+	)
+	if err != nil {
+		log.Printf("创建二维码失败: %v", err)
+		c.JSON(http.StatusOK, gin.H{"error": "创建二维码失败"})
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	w := nopCloser{buf}
+	stdWriter := standard.NewWithWriter(w,
+		standard.WithQRWidth(10),
+		standard.WithBuiltinImageEncoder(standard.PNG_FORMAT),
+	)
+	if err = qrc.Save(stdWriter); err != nil {
+		log.Printf("生成PNG失败: %v", err)
+		c.JSON(http.StatusOK, gin.H{"error": "生成PNG失败"})
+		return
+	}
+
+	pngBytes := buf.Bytes()
+	log.Printf("[INFO] 生成的PNG大小: %d bytes", len(pngBytes))
+
+	// 验证PNG头部
+	if len(pngBytes) < 8 || string(pngBytes[1:4]) != "PNG" {
+		log.Printf("[ERROR] PNG格式无效，头部: %v", pngBytes[:min(8, len(pngBytes))])
+		c.JSON(http.StatusOK, gin.H{"error": "生成的二维码图片格式无效"})
+		return
+	}
+
+	// Base64编码
+	imageBase64 := base64.StdEncoding.EncodeToString(pngBytes)
+	log.Printf("[INFO] Base64编码长度: %d", len(imageBase64))
+
+	// 使用图片的最后100个字符作为session key
+	sessionKey := imageBase64[len(imageBase64)-100:]
+
 	loginSessions[sessionKey] = &LoginSession{
 		AuthCode:   qrResp.Data.AuthCode,
 		QRCodeURL:  qrResp.Data.URL,
@@ -60,7 +117,7 @@ func LoginUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"image": qrResp.Data.URL, // 直接返回URL
+		"image": imageBase64,
 		"key":   sessionKey,
 	})
 }
