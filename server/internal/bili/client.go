@@ -453,23 +453,46 @@ func PollWebQRCodeStatus(oauthKey string) (*QRCodePollResponse, error) {
 		return nil, fmt.Errorf("轮询状态失败: %w", err)
 	}
 
+	// 打印原始响应用于调试
+	rawBody := resp.String()
+	log.Printf("[WEB_POLL_DEBUG] 原始响应: %s", rawBody)
+
 	if err := resp.UnmarshalJson(&pollResp); err != nil {
 		return nil, fmt.Errorf("解析轮询响应失败: %w", err)
 	}
 
-	// 处理状态码
+	// 参考 gobup 项目的状态码处理逻辑：
+	// status=true: 登录成功
+	// data.code=-4: 未扫码
+	// data.code=-5: 已扫码待确认
+	// data.code=-2: 二维码已过期
+	log.Printf("[WEB_POLL] 原始响应 - status: %v, data.code: %d, data.message: %s",
+		pollResp.Status, pollResp.Data.Code, pollResp.Data.Message)
+
+	// 优先判断 status 字段
 	if pollResp.Status {
+		// 登录成功
 		pollResp.Data.Code = 0
+		log.Printf("[WEB_POLL] 登录成功 - url=%s", pollResp.Data.URL)
 	} else {
-		var rawData map[string]interface{}
-		resp.Unmarshal(&rawData)
-		if data, ok := rawData["data"].(map[string]interface{}); ok {
-			if codeVal, ok := data["code"].(float64); ok {
-				pollResp.Data.Code = int(codeVal)
-			}
-		}
-		if pollResp.Data.Code == 0 {
+		// 根据 data.code 字段判断状态
+		switch pollResp.Data.Code {
+		case -4:
+			// 二维码未失效，等待扫码
 			pollResp.Data.Code = 86101
+			log.Printf("[WEB_POLL] 等待扫码")
+		case -5:
+			// 已扫码，等待确认
+			pollResp.Data.Code = 86090
+			log.Printf("[WEB_POLL] 已扫码，等待确认")
+		case -2:
+			// 二维码已失效
+			pollResp.Data.Code = 86038
+			log.Printf("[WEB_POLL] 二维码已过期")
+		default:
+			// 其他未知状态，默认为等待扫码
+			pollResp.Data.Code = 86101
+			log.Printf("[WEB_POLL] 未知状态 code=%d，默认等待扫码", pollResp.Data.Code)
 		}
 	}
 
