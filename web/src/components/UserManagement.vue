@@ -41,9 +41,13 @@
       <el-tabs v-model="loginTab">
         <el-tab-pane label="扫码登录" name="qrcode">
           <div class="login-qrcode">
-            <div v-if="!qrcodeUrl" class="qrcode-placeholder">
-              <el-button type="primary" :loading="qrcodeLoading" @click="generateQRCode">
-                生成二维码
+            <div v-if="qrcodeLoading" class="qrcode-placeholder">
+              <div class="loading-spinner"></div>
+              <p>正在生成二维码...</p>
+            </div>
+            <div v-else-if="!qrcodeUrl" class="qrcode-placeholder">
+              <el-button type="primary" @click="generateQRCode">
+                重新生成二维码
               </el-button>
             </div>
             <div v-else class="qrcode-content">
@@ -85,7 +89,7 @@
 </template>
 
 <script setup>
-import { ref, onUnmounted } from 'vue'
+import { ref, onUnmounted, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { userAPI } from '@/api'
 import QRCode from 'qrcode'
@@ -106,6 +110,31 @@ let pollingTimer = null
 // Cookie登录
 const cookieInput = ref('')
 const cookieLoginLoading = ref(false)
+
+// 监听对话框打开，自动生成二维码
+watch(showLoginDialog, (newVal) => {
+  if (newVal && loginTab.value === 'qrcode') {
+    // 对话框打开且在扫码登录标签，自动生成二维码
+    nextTick(() => {
+      if (!qrcodeUrl.value) {
+        generateQRCode()
+      }
+    })
+  } else if (!newVal) {
+    // 对话框关闭，清理状态
+    cancelLogin()
+  }
+})
+
+// 监听标签切换
+watch(loginTab, (newVal) => {
+  if (newVal === 'qrcode' && showLoginDialog.value && !qrcodeUrl.value) {
+    // 切换到扫码登录且二维码未生成，自动生成
+    nextTick(() => {
+      generateQRCode()
+    })
+  }
+})
 
 const loadUsers = async () => {
   loading.value = true
@@ -142,11 +171,20 @@ const generateQRCode = async () => {
     authKey = data.key
     qrcodeUrl.value = data.image
     
+    // 等待 DOM 更新后再生成二维码
+    await nextTick()
+    
     // 生成二维码
-    await QRCode.toCanvas(qrcodeCanvas.value, data.image, {
-      width: 200,
-      margin: 2
-    })
+    if (qrcodeCanvas.value) {
+      await QRCode.toCanvas(qrcodeCanvas.value, data.image, {
+        width: 200,
+        margin: 2
+      })
+    } else {
+      ElMessage.error('二维码画布未准备好')
+      loginStatus.value = '二维码画布未准备好'
+      return
+    }
     
     startPolling()
   } catch (error) {
@@ -299,8 +337,24 @@ loadUsers()
 
 .qrcode-placeholder {
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #409eff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 10px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .qrcode-content {
