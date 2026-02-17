@@ -61,14 +61,16 @@ jobs:
       - name: Compress binaries
         run: |
           cd build
+          ls -lah
           tar -czf goban-linux-amd64.tar.gz goban-linux-amd64
           tar -czf goban-linux-arm64.tar.gz goban-linux-arm64
           tar -czf goban-darwin-amd64.tar.gz goban-darwin-amd64
           tar -czf goban-darwin-arm64.tar.gz goban-darwin-arm64
           zip goban-windows-amd64.zip goban-windows-amd64.exe
           
-          # Remove uncompressed binaries
-          rm goban-linux-* goban-darwin-* goban-windows-*.exe
+          # Remove only uncompressed binaries
+          rm -f goban-linux-amd64 goban-linux-arm64 goban-darwin-amd64 goban-darwin-arm64 goban-windows-amd64.exe
+          echo "After compression:"
           ls -lh
 
       - name: Compress frontend
@@ -76,6 +78,7 @@ jobs:
           cd web
           tar -czf ../build/goban-web.tar.gz dist/
           cd ../build
+          echo "Final build directory:"
           ls -lh
 
       - name: Create Release
