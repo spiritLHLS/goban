@@ -10,6 +10,14 @@ import (
 	"github.com/imroc/req/v3"
 )
 
+// min 辅助函数
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 type BiliClient struct {
 	Cookies       string
 	UID           int64
@@ -469,18 +477,24 @@ func PollWebQRCodeStatus(oauthKey string) (*QRCodePollResponse, error) {
 }
 
 // ExtractCookiesFromWebPollResponse 从Web端轮询响应中提取Cookie
-func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse) string {
+func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse, client *req.Client) string {
 	if pollResp == nil || pollResp.Data.Code != 0 {
+		log.Printf("[WEB_COOKIE] 登录未完成，跳过Cookie提取 - code=%d", pollResp.Data.Code)
 		return ""
 	}
 
 	if pollResp.Data.URL == "" {
+		log.Printf("[WEB_COOKIE] 错误：URL为空")
 		return ""
 	}
+
+	// Web端登录成功后，URL中包含Cookie参数
+	log.Printf("[WEB_COOKIE] 解析登录URL: %s", pollResp.Data.URL[:min(100, len(pollResp.Data.URL))])
 
 	// 解析URL中的Cookie参数
 	parts := strings.Split(pollResp.Data.URL, "?")
 	if len(parts) < 2 {
+		log.Printf("[WEB_COOKIE] URL没有查询参数")
 		return ""
 	}
 
@@ -499,6 +513,8 @@ func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse) string {
 	sid := params["sid"]
 
 	if dedeUserID == "" || sessdata == "" || biliJct == "" {
+		log.Printf("[WEB_COOKIE] 关键字段缺失 - DedeUserID: %v, SESSDATA: %v, bili_jct: %v",
+			dedeUserID != "", sessdata != "", biliJct != "")
 		return ""
 	}
 
@@ -515,5 +531,9 @@ func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse) string {
 		cookieStrs = append(cookieStrs, fmt.Sprintf("sid=%s", sid))
 	}
 
-	return strings.Join(cookieStrs, "; ")
+	result := strings.Join(cookieStrs, "; ")
+	log.Printf("[WEB_COOKIE] 提取成功 - DedeUserID: %s, SESSDATA长度: %d, bili_jct长度: %d",
+		dedeUserID, len(sessdata), len(biliJct))
+
+	return result
 }

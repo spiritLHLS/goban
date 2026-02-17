@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/imroc/req/v3"
 	"github.com/spiritlhl/goban/internal/bili"
 	"github.com/spiritlhl/goban/internal/database"
 	"github.com/spiritlhl/goban/internal/models"
@@ -175,11 +176,16 @@ func LoginCheck(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[POLL] 轮询响应 - code: %d", pollResp.Data.Code)
+	log.Printf("[POLL] 轮询响应 - code: %d, status: %v, message: %s, url: %s", 
+		pollResp.Data.Code, pollResp.Status, pollResp.Data.Message, pollResp.Data.URL)
+
+	log.Printf("[DEBUG] 会话类型: %s, AuthCode: %s", session.Status, session.AuthCode)
 
 	switch pollResp.Data.Code {
 	case 0: // 登录成功
-		cookieStr := bili.ExtractCookiesFromWebPollResponse(pollResp)
+		// 创建HTTP客户端用于Cookie提取
+		client := req.C().ImpersonateChrome()
+		cookieStr := bili.ExtractCookiesFromWebPollResponse(pollResp, client)
 		log.Printf("[Web] 提取到的Cookie: %s", cookieStr)
 		
 		if cookieStr == "" {
