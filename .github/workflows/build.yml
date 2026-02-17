@@ -4,26 +4,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            binary_name: goban
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-            binary_name: goban.exe
-          - os: macos-latest
-            goos: darwin
-            goarch: amd64
-            binary_name: goban
-
+  build-and-release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,18 +16,22 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          cache: true
           cache-dependency-path: server/go.sum
-
-      - name: Build backend
-        working-directory: ./server
-        run: |
-          go mod download
-          go build -o ${{ matrix.binary_name }} -ldflags="-s -w" .
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Create build directory
+        run: mkdir -p build
 
       - name: Build frontend
         working-directory: ./web
@@ -51,39 +39,60 @@ jobs:
           npm install
           npm run build
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: goban-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            server/${{ matrix.binary_name }}
-            web/dist/
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-    
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Generate tag name
-        id: tag
+      - name: Build backend binaries
+        working-directory: ./server
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "name=dev-build-$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
-          else
-            echo "name=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          fi
+          go mod download
+          export LDFLAGS="-s -w"
+          
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -ldflags="$LDFLAGS" -o ../build/goban-linux-amd64 .
+          
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -ldflags="$LDFLAGS" -o ../build/goban-linux-arm64 .
+          
+          # Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o ../build/goban-windows-amd64.exe .
+          
+          # macOS AMD64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="$LDFLAGS" -o ../build/goban-darwin-amd64 .
+          
+          # macOS ARM64
+          GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o ../build/goban-darwin-arm64 .
+
+      - name: Compress binaries
+        run: |
+          cd build
+          tar -czf goban-linux-amd64.tar.gz goban-linux-amd64
+          tar -czf goban-linux-arm64.tar.gz goban-linux-arm64
+          tar -czf goban-darwin-amd64.tar.gz goban-darwin-amd64
+          tar -czf goban-darwin-arm64.tar.gz goban-darwin-arm64
+          zip goban-windows-amd64.zip goban-windows-amd64.exe
+          
+          # Remove uncompressed binaries
+          rm goban-linux-* goban-darwin-* goban-windows-*.exe
+          ls -lh
+
+      - name: Compress frontend
+        run: |
+          cd web
+          tar -czf ../build/goban-web.tar.gz dist/
+          cd ../build
+          ls -lh
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            goban-*/server/*
-          draft: ${{ github.event_name == 'workflow_dispatch' }}
-          tag_name: ${{ steps.tag.outputs.name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="dev-build-${{ steps.date.outputs.date }}"
+          
+          gh release create "$TAG_NAME" \
+            --title "Development Build $TAG_NAME" \
+            --notes "Automated development build created on $(date +'%Y-%m-%d %H:%M:%S')" \
+            --draft \
+            ./build/goban-linux-amd64.tar.gz \
+            ./build/goban-linux-arm64.tar.gz \
+            ./build/goban-darwin-amd64.tar.gz \
+            ./build/goban-darwin-arm64.tar.gz \
+            ./build/goban-windows-amd64.zip \
+            ./build/goban-web.tar.gz
