@@ -2,10 +2,6 @@
 
 一个用于监控B站UP主视频评论区，自动匹配关键字并举报违规评论的系统。
 
-![Docker Pulls](https://img.shields.io/docker/pulls/spiritlhl/goban)
-![GitHub release](https://img.shields.io/github/v/release/spiritLHLS/goban)
-![License](https://img.shields.io/github/license/spiritLHLS/goban)
-
 ## 快速开始
 
 ### 环境要求
