@@ -2,79 +2,9 @@
 
 一个用于监控B站UP主视频评论区，自动匹配关键字并举报违规评论的系统。
 
-## 项目结构
-
-```
-goban/
-├── server/           # 后端 Go 代码
-│   ├── main.go
-│   ├── go.mod
-│   ├── internal/     # 内部包
-│   └── goban.exe     # 编译后的可执行文件
-├── web/              # 前端 Vue 代码
-│   ├── src/
-│   ├── package.json
-│   └── dist/         # 构建输出
-├── .github/          # GitHub Actions 配置
-│   └── workflows/
-└── README.md
-```
-
-## 功能特性
-
-- ✅ **B站账号管理**
-  - 支持扫码登录
-  - 支持Cookie直接登录
-  - 账号状态监控
-
-- ✅ **监控任务管理**
-  - 监控指定UP主的最新N条视频
-  - 每个视频监控最新M条评论（可配置）
-  - 关键字匹配（支持多个关键字）
-  - 可配置监控间隔
-  - 可配置举报间隔（默认6秒，防止超过1分钟10次限制）
-  - API调用失败自动重试（指数退避策略）
-
-- ✅ **自动举报**
-  - 匹配关键字自动举报评论
-  - 举报理由：传谣类（reason=11）
-  - 防重复举报
-  - 举报记录追踪
-  - 可配置举报间隔（默认6秒，规避单IP限制：1分钟10条）
-  - 失败自动重试（指数退避：2秒、4秒、8秒...）
-
-- ✅ **代理支持**
-  - 支持HTTP代理：http://proxy:port
-  - 支持SOCKS5代理：socks5://proxy:port
-  - 每个任务独立配置代理
-  - 自动限速（可配置举报间隔，默认6秒/条）
-
-- ✅ **智能重试机制**
-  - 所有Bilibili API调用支持自动重试
-  - 指数退避策略：基础间隔 × 2^尝试次数（如：2秒→4秒→8秒）
-  - 可配置最大重试次数（默认3次）
-  - 可配置基础重试间隔（默认2秒）
-
-- ✅ **日志系统**
-  - 监控日志记录
-  - 举报记录查询
-  - 详细的操作追踪
-
-## 技术栈
-
-### 后端
-- Go 1.21+
-- Gin (Web框架)
-- GORM (ORM)
-- SQLite (数据库)
-- imroc/req (HTTP客户端)
-
-### 前端
-- Vue 3
-- Element Plus
-- Axios
-- Vue Router
-- QRCode.js
+![Docker Pulls](https://img.shields.io/docker/pulls/spiritlhl/goban)
+![GitHub release](https://img.shields.io/github/v/release/spiritLHLS/goban)
+![License](https://img.shields.io/github/license/spiritLHLS/goban)
 
 ## 快速开始
 
@@ -83,7 +13,92 @@ goban/
 - Go 1.21+
 - Node.js 16+
 
-### 后端部署
+或使用Docker（推荐）
+
+### 方式一：Docker部署
+
+#### 使用Docker命令
+
+```bash
+# 拉取镜像
+docker pull spiritlhl/goban:latest
+
+# 运行容器
+docker run -d \
+  --name goban \
+  -p 8080:8080 \
+  -e USERNAME=admin \
+  -e PASSWORD=admin123 \
+  -e TZ=Asia/Shanghai \
+  -v $(pwd)/data:/app/data \
+  --restart unless-stopped \
+  spiritlhl/goban:latest
+```
+
+#### 使用Docker Compose
+
+1. 创建 `docker-compose.yml` 文件：
+
+```yaml
+version: '3.8'
+
+services:
+  goban:
+    image: spiritlhl/goban:latest
+    container_name: goban
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - USERNAME=admin
+      - PASSWORD=admin123
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+```
+
+2. 启动服务：
+
+```bash
+docker-compose up -d
+```
+
+3. 访问 `http://localhost:8080`（注意：Docker部署前后端在同一端口）
+
+
+#### 环境变量说明
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| PORT | 服务端口 | 8080 |
+| USERNAME | 登录用户名 | admin |
+| PASSWORD | 登录密码 | admin123 |
+| TZ | 时区 | Asia/Shanghai |
+
+#### 从源码构建Docker镜像
+
+```bash
+# 克隆仓库
+git clone https://github.com/spiritLHLS/goban.git
+cd goban
+
+# 构建Docker镜像
+docker build -t goban:local .
+
+# 运行容器
+docker run -d \
+  --name goban \
+  -p 8080:8080 \
+  -e USERNAME=admin \
+  -e PASSWORD=admin123 \
+  -v $(pwd)/data:/app/data \
+  goban:local
+```
+
+### 方式二：手动部署
+
+#### 后端部署
 
 1. 安装依赖
 
@@ -133,7 +148,7 @@ npm run build
 
 ### 1. 登录系统
 
-默认账号：`admin` / `admin123`
+默认账号 `admin` / `admin123` 部署时请确保修改为自定义的用户名密码避免被爆破
 
 ### 2. 添加B站账号
 
@@ -208,6 +223,32 @@ Authorization: Basic base64(username:password)
    - HTTP: `http://host:port`
    - SOCKS5: `socks5://host:port`
    - 带认证: `http://user:pass@host:port`
+
+8. **Docker部署**：
+   - Docker部署前后端在同一端口（8080）
+   - 数据库文件保存在容器内 `/app/data` 目录，建议挂载卷持久化
+   - 支持多架构：amd64和arm64
+   - 容器自带健康检查，确保服务可用性
+
+## Docker镜像
+
+### 官方镜像
+
+```bash
+docker pull spiritlhl/goban:latest
+```
+
+### 支持的标签
+
+- `latest` - 最新稳定版本
+- `v1.x.x` - 特定版本号
+- `main` - 主分支最新构建
+
+### 多架构支持
+
+镜像支持以下架构：
+- `linux/amd64` - x86_64架构
+- `linux/arm64` - ARM64架构（适用于Raspberry Pi 4、Apple Silicon等）
 
 ## 致谢
 

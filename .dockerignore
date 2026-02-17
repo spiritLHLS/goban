@@ -1,0 +1,43 @@
+# Git
+.git/
+.gitignore
+.github/
+
+# Documentation
+README.md
+GUIDE.md
+*.md
+
+# Node modules
+web/node_modules/
+web/dist/
+
+# Go
+server/goban
+server/goban.exe
+server/*.db
+server/*.sqlite*
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Scripts
+start.bat
+start.sh

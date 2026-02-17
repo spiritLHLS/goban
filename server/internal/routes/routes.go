@@ -1,6 +1,10 @@
 package routes
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
+
 	"github.com/gin-gonic/gin"
 	"github.com/spiritlhl/goban/internal/controllers"
 	"github.com/spiritlhl/goban/internal/middleware"
@@ -47,4 +51,17 @@ func SetupRoutes(router *gin.Engine) {
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// 静态文件服务（用于Docker部署）
+	// 检查web/dist目录是否存在
+	distPath := "./web/dist"
+	if _, err := os.Stat(distPath); err == nil {
+		// 服务静态文件
+		router.StaticFS("/assets", http.Dir(filepath.Join(distPath, "assets")))
+		
+		// SPA路由处理 - 所有非API和非静态文件的请求都返回index.html
+		router.NoRoute(func(c *gin.Context) {
+			c.File(filepath.Join(distPath, "index.html"))
+		})
+	}
 }
