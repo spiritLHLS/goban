@@ -141,11 +141,18 @@ type UserInfoResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		Mid   int64  `json:"mid"`
-		Uname string `json:"uname"`
-		Face  string `json:"face"`
-		Level int    `json:"level_info.current_level"`
+		Mid       int64  `json:"mid"`
+		Uname     string `json:"uname"`
+		Face      string `json:"face"`
+		LevelInfo struct {
+			CurrentLevel int `json:"current_level"`
+		} `json:"level_info"`
 	} `json:"data"`
+}
+
+// GetLevel 获取用户等级
+func (u *UserInfoResponse) GetLevel() int {
+	return u.Data.LevelInfo.CurrentLevel
 }
 
 // GetUserInfo 获取用户信息

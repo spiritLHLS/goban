@@ -221,7 +221,7 @@ func LoginCheck(c *gin.Context) {
 				Face:       userInfo.Data.Face,
 				Cookies:    cookieStr,
 				Login:      true,
-				Level:      userInfo.Data.Level,
+				Level:      userInfo.GetLevel(),
 				LoginTime:  now,
 				ExpireTime: expireTime,
 			}
@@ -232,7 +232,7 @@ func LoginCheck(c *gin.Context) {
 			user.Face = userInfo.Data.Face
 			user.Cookies = cookieStr
 			user.Login = true
-			user.Level = userInfo.Data.Level
+			user.Level = userInfo.GetLevel()
 			user.LoginTime = now
 			user.ExpireTime = expireTime
 			db.Save(&user)
@@ -336,7 +336,7 @@ func LoginByCookie(c *gin.Context) {
 			Face:       userInfo.Data.Face,
 			Cookies:    cookieStr,
 			Login:      true,
-			Level:      userInfo.Data.Level,
+			Level:      userInfo.GetLevel(),
 			LoginTime:  now,
 			ExpireTime: expireTime,
 		}
@@ -346,7 +346,7 @@ func LoginByCookie(c *gin.Context) {
 		user.Face = userInfo.Data.Face
 		user.Cookies = cookieStr
 		user.Login = true
-		user.Level = userInfo.Data.Level
+		user.Level = userInfo.GetLevel()
 		user.LoginTime = now
 		user.ExpireTime = expireTime
 		db.Save(&user)
