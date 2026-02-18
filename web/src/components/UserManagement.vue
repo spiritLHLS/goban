@@ -177,12 +177,19 @@ const startPolling = () => {
   if (pollingTimer) return
   
   pollingTimer = setInterval(async () => {
+    // 检查authKey是否有效，避免重复请求
+    if (!authKey) {
+      stopPolling()
+      return
+    }
+    
     try {
       const result = await userAPI.loginCheck(authKey)
       
       if (result.status === 'success') {
         loginStatus.value = '登录成功！'
         ElMessage.success('登录成功')
+        authKey = '' // 立即清空authKey，防止后续请求
         stopPolling()
         showLoginDialog.value = false
         qrcodeUrl.value = ''
@@ -190,11 +197,13 @@ const startPolling = () => {
       } else if (result.status === 'expired') {
         loginStatus.value = '二维码已过期'
         ElMessage.warning('二维码已过期，请重新生成')
+        authKey = ''
         stopPolling()
         qrcodeUrl.value = ''
       } else if (result.status === 'failed') {
         loginStatus.value = result.message || '登录失败'
         ElMessage.error(result.message || '登录失败')
+        authKey = ''
         stopPolling()
         qrcodeUrl.value = ''
       } else if (result.status === 'scanned') {
