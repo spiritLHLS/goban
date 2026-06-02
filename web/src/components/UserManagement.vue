@@ -23,14 +23,28 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="Cookie状态" width="130">
+        <template #default="{ row }">
+          <el-tag :type="cookieStatusType(row.cookie_status)" size="small">
+            {{ cookieStatusText(row.cookie_status) }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="level" label="等级" width="80" />
       <el-table-column label="登录时间" width="180">
         <template #default="{ row }">
           {{ formatTime(row.login_time) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column label="最后检测" width="180">
         <template #default="{ row }">
+          {{ formatTime(row.last_cookie_check) }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="cookie_message" label="状态消息" min-width="160" show-overflow-tooltip />
+      <el-table-column label="操作" width="190" fixed="right">
+        <template #default="{ row }">
+          <el-button size="small" @click="handleCheck(row)" :loading="checkingId === row.id">检测</el-button>
           <el-button type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -110,6 +124,7 @@ let pollingTimer = null
 // Cookie登录
 const cookieInput = ref('')
 const cookieLoginLoading = ref(false)
+const checkingId = ref(null)
 
 // 监听对话框打开，自动生成二维码
 watch(showLoginDialog, (newVal) => {
@@ -277,10 +292,40 @@ const handleDelete = async (row) => {
   }
 }
 
+const handleCheck = async (row) => {
+  checkingId.value = row.id
+  try {
+    const result = await userAPI.check(row.id)
+    if (result.type === 'success') {
+      ElMessage.success(result.msg || 'Cookie有效')
+    } else {
+      ElMessage.warning(result.msg || 'Cookie状态异常')
+    }
+    await loadUsers()
+  } catch (error) {
+    ElMessage.error('检测失败')
+  } finally {
+    checkingId.value = null
+  }
+}
+
 const formatTime = (time) => {
   if (!time) return '-'
   const date = new Date(time)
   return date.toLocaleString('zh-CN')
+}
+
+const cookieStatusText = (status) => {
+  if (status === 'valid') return '有效'
+  if (status === 'invalid') return '失效'
+  if (status === 'unknown') return '未知'
+  return '未检测'
+}
+
+const cookieStatusType = (status) => {
+  if (status === 'valid') return 'success'
+  if (status === 'invalid') return 'danger'
+  return 'info'
 }
 
 onUnmounted(() => {

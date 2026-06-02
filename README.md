@@ -1,257 +1,253 @@
 # Goban - B站评论监控与自动举报系统
 
-一个用于监控B站UP主视频评论区，自动匹配关键字并举报违规评论的系统。
+[English](./README.en.md)
 
-## 快速开始
+Goban 是一个 Go + Vue 全栈应用，用于监控多个 B 站 UP 主的视频评论区，按关键字或正则规则匹配违规评论，并通过已登录的 B 站账号自动举报。系统提供 Web 管理界面、SQLite 持久化、Docker 部署、举报历史导出、白名单、Webhook 通知和运行状态统计。
 
-### 环境要求
+> 本项目仅供学习交流使用。请遵守 B 站规则、当地法律法规和平台风控要求，使用后果由使用者自行承担。
 
-- Go 1.21+
-- Node.js 16+
+## 功能概览
 
-或使用Docker（推荐）
+- 多 B 站账号管理：扫码登录、Cookie 登录、Cookie 有效性检测。
+- 多 UP 主监控：一个任务可配置多个 UP 主 UID。
+- 关键字规则管理：支持普通字符串和正则表达式，支持大小写敏感开关和实时预览。
+- 白名单：按 UID 或用户名跳过特定用户评论。
+- 举报限流：全局串行限流，默认每 6 秒最多举报一次，避免多个任务并发突破频率。
+- 监控调度：使用 cron 调度，任务运行有重复执行保护和并发上限。
+- API 退避重试：B 站 API 请求失败时使用指数退避和随机抖动重试。
+- 评论分页抓取：按页抓取视频评论，避免只读取第一页。
+- 监控状态：展示检测评论数、匹配数、举报数、最近状态和异常信息。
+- 举报历史：支持按任务、UP 主、关键字、状态和时间筛选，并导出 CSV。
+- Webhook 通知：举报成功后可推送 Telegram 或飞书。
+- SQLite 持久化：账号、任务、目标、规则、白名单、配置、日志和举报记录均落库。
+- Cookie 加密存储：使用 AES-GCM 加密，密钥来自 `GOBAN_SECRET_KEY`，未配置时回退到 `PASSWORD`。
 
-### 方式一：Docker部署
+## 架构说明
 
-#### 使用Docker命令
+```text
+goban/
+├── server/                 Go 后端
+│   ├── main.go             服务入口，初始化配置、数据库、监控服务和路由
+│   └── internal/
+│       ├── bili/           B站 API 客户端、登录、评论、举报封装
+│       ├── config/         环境变量配置
+│       ├── controllers/    HTTP API 控制器
+│       ├── database/       SQLite 初始化和默认配置
+│       ├── middleware/     Basic Auth
+│       ├── models/         GORM 数据模型
+│       ├── monitor/        cron 调度、任务执行、限流、Cookie 检测
+│       ├── notify/         Telegram/飞书 Webhook
+│       ├── rules/          普通关键词和正则匹配
+│       ├── secure/         Cookie 加解密
+│       ├── settings/       可视化配置读写
+│       └── whitelist/      白名单匹配
+├── web/                    Vue 3 + Element Plus 前端
+│   └── src/components/     账号、任务、规则、白名单、日志、举报、配置和状态页面
+├── Dockerfile              前后端多阶段构建
+├── docker-compose.yml      Docker Compose 示例
+└── .github/workflows/      Release 和 Docker 镜像构建
+```
+
+后端通过 Gin 暴露 `/api` 接口，前端生产构建产物由后端静态托管。开发时 Vite 将 `/api` 代理到后端。
+
+## 环境要求
+
+- Go 1.24+
+- Node.js 24+
+- npm 10+
+- Docker 24+（可选）
+
+## Docker 部署
+
+### Docker Compose
 
 ```bash
-# 拉取镜像
-docker pull spiritlhl/goban:latest
+docker compose up -d
+```
 
-# 运行容器
+默认访问地址：
+
+```text
+http://localhost:38080
+```
+
+默认账号：
+
+```text
+admin / admin123
+```
+
+生产环境务必修改 `USERNAME`、`PASSWORD` 和 `GOBAN_SECRET_KEY`。
+
+### Docker 命令
+
+```bash
 docker run -d \
   --name goban \
   -p 38080:8080 \
   -e USERNAME=admin \
   -e PASSWORD=admin123 \
+  -e GOBAN_SECRET_KEY=change-me \
+  -e DB_PATH=/app/data/goban.db \
   -e TZ=Asia/Shanghai \
-  -v $(pwd)/goban:/app/data \
+  -v "$(pwd)/data:/app/data" \
   --restart unless-stopped \
   spiritlhl/goban:latest
 ```
 
-#### 使用Docker Compose
-
-1. 创建 `docker-compose.yml` 文件：
-
-```yaml
-version: '3.8'
-
-services:
-  goban:
-    image: spiritlhl/goban:latest
-    container_name: goban
-    restart: unless-stopped
-    ports:
-      - "38080:8080"
-    environment:
-      - PORT=8080
-      - USERNAME=admin
-      - PASSWORD=admin123
-      - TZ=Asia/Shanghai
-    volumes:
-      - ./data:/app/data
-```
-
-2. 启动服务：
+### 从源码构建镜像
 
 ```bash
-docker-compose up -d
-```
-
-3. 访问 `http://localhost:8080`（注意：Docker部署前后端在同一端口）
-
-
-#### 环境变量说明
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| PORT | 服务端口 | 8080 |
-| USERNAME | 登录用户名 | admin |
-| PASSWORD | 登录密码 | admin123 |
-| TZ | 时区 | Asia/Shanghai |
-
-#### 从源码构建Docker镜像
-
-```bash
-# 克隆仓库
-git clone https://github.com/spiritLHLS/goban.git
-cd goban
-
-# 构建Docker镜像
 docker build -t goban:local .
-
-# 运行容器
 docker run -d \
   --name goban \
   -p 38080:8080 \
   -e USERNAME=admin \
   -e PASSWORD=admin123 \
-  -v $(pwd)/goban:/app/data \
+  -e GOBAN_SECRET_KEY=change-me \
+  -v "$(pwd)/data:/app/data" \
   goban:local
 ```
 
-### 方式二：手动部署
+## 手动开发运行
 
-#### 后端部署
-
-1. 安装依赖
+### 后端
 
 ```bash
 cd server
 go mod download
+DB_PATH=../data/goban.db \
+USERNAME=admin \
+PASSWORD=admin123 \
+GOBAN_SECRET_KEY=change-me \
+go run .
 ```
 
-2. 配置环境变量（可选）
+后端默认监听 `http://localhost:8080`。
 
-```bash
-export PORT=8080              # 服务端口，默认8080
-export USERNAME=admin         # 登录用户名，默认admin
-export PASSWORD=admin123      # 登录密码，默认admin123
-```
-
-3. 运行后端
-
-```bash
-go run main.go
-```
-
-### 前端部署
-
-1. 安装依赖
+### 前端
 
 ```bash
 cd web
-npm install
-```
-
-2. 开发模式
-
-```bash
+npm ci
 npm run dev
 ```
 
-访问 http://localhost:3000
+前端开发地址为 `http://localhost:3000`，接口代理到 `http://localhost:8080`。
 
-3. 生产构建
+## 环境变量
 
-```bash
-npm run build
-```
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `PORT` | 后端监听端口 | `8080` |
+| `USERNAME` | Web Basic Auth 用户名 | `admin` |
+| `PASSWORD` | Web Basic Auth 密码，也会作为默认加密密钥回退值 | `admin123` |
+| `GOBAN_SECRET_KEY` | Cookie 加密密钥，生产环境必须设置 | 空，回退到 `PASSWORD` |
+| `DB_PATH` | SQLite 数据库路径 | `data/goban.db` |
+| `DEBUG` | Gin Debug 模式 | `false` |
+| `MAX_CONCURRENT_TASKS` | 最大并发监控任务数 | `2` |
+| `TZ` | 容器时区 | `Asia/Shanghai` |
 
-## 使用说明
+## 使用流程
 
-### 1. 登录系统
+1. 登录 Web 管理界面。
+2. 在“B站账号”中添加账号，可扫码登录或粘贴 Cookie。
+3. 在“关键字规则”中创建普通关键词或正则规则，并用预览框验证匹配效果。
+4. 如有需要，在“白名单”中添加不会触发举报的 UID 或用户名。
+5. 在“监控任务”中选择账号，填写一个或多个 UP 主 UID，选择关键字规则并设置频率、重试、代理等参数。
+6. 在“监控状态”中查看检测数、匹配数、举报数和最近异常。
+7. 在“举报记录”中筛选历史记录，必要时导出 CSV。
+8. 在“系统配置”中调整默认监控参数、Cookie 检查间隔和 Webhook。
 
-默认账号 `admin` / `admin123` 部署时请确保修改为自定义的用户名密码避免被爆破
+## 关键配置建议
 
-### 2. 添加B站账号
+- 检查间隔建议不低于 300 秒。
+- 举报间隔建议不低于 6 秒，系统会强制最低 6 秒。
+- 高频评论区建议降低每次评论抓取数，或增加任务间隔。
+- 如配置代理，格式可使用 `http://host:port`、`socks5://host:port` 或带认证 URL。
+- `GOBAN_SECRET_KEY` 一旦变更，旧数据库中的 Cookie 将无法解密；若更换密钥，建议重新登录账号。
 
-- **扫码登录**：生成二维码，使用B站APP扫描
-- **Cookie登录**：从浏览器复制Cookie直接登录
+## API 概览
 
-### 3. 创建监控任务
+所有 `/api` 接口使用 Basic Auth：
 
-1. 选择要使用的B站账号
-2. 输入要监控的UP主UID
-3. 配置监控参数：
-   - **视频数量**：监控该UP主最新的多少条视频（1-20条）
-   - **评论数量**：每个视频检查多少条最新评论（10-200条）
-   - **关键字**：多个关键字用逗号分隔
-   - **检查间隔**：多久执行一次监控（秒）
-4. **（推荐）配置高级选项**：
-   - **代理地址**：规避单IP举报限制
-     - HTTP代理：`http://127.0.0.1:7890`
-     - SOCKS5代理：`socks5://127.0.0.1:1080`
-   - **举报间隔**：每次举报的等待时间（默认6秒）
-   - **最大重试**：API失败时的重试次数（默认3次）
-   - **重试间隔**：重试的基础间隔，使用指数退避（默认2秒）
-5. 创建任务后自动开始监控
-
-### 4. 查看日志和举报记录
-
-- **监控日志**：查看监控任务执行情况
-- **举报记录**：查看所有举报详情
-
-## API文档
-
-### 认证
-
-```
+```http
 Authorization: Basic base64(username:password)
 ```
 
-### 主要接口
+主要接口：
 
-- `GET /api/users/list` - 获取B站用户列表
-- `GET /api/users/login` - 生成登录二维码
-- `POST /api/users/loginByCookie` - Cookie登录
-- `GET /api/tasks/list` - 获取监控任务
-- `POST /api/tasks/create` - 创建任务
-- `GET /api/logs/monitor` - 获取监控日志
-- `GET /api/logs/report` - 获取举报记录
+- `GET /api/users/list`：账号列表
+- `GET /api/users/login`：生成 B 站登录二维码
+- `GET /api/users/loginCheck`：轮询二维码登录状态
+- `POST /api/users/loginByCookie`：Cookie 登录
+- `POST /api/users/:id/check`：检测 Cookie 有效性
+- `GET /api/tasks/list`：任务列表
+- `POST /api/tasks/create`：创建任务
+- `PUT /api/tasks/:id`：更新任务
+- `GET /api/tasks/:id/test`：手动测试任务匹配
+- `GET /api/keywords/list`：关键字规则列表
+- `POST /api/keywords/preview`：预览规则匹配
+- `GET /api/whitelist/list`：白名单列表
+- `GET /api/status`：监控状态汇总
+- `GET /api/settings` / `PUT /api/settings`：系统配置
+- `GET /api/logs/monitor`：监控日志
+- `GET /api/logs/report`：举报记录
+- `GET /api/logs/report/export`：导出举报记录 CSV
+- `GET /health`：健康检查，无需认证
 
-## 注意事项
+## 数据库
 
-1. **举报频率限制**：
-   - B站单IP限制：1分钟10条举报
-   - 系统默认举报间隔6秒（确保不超限）
-   - 强烈建议配置代理以提高举报效率
+默认数据库为 SQLite，路径由 `DB_PATH` 控制。默认表包括：
 
-2. **API重试机制**：
-   - 所有API调用失败会自动重试
-   - 使用指数退避策略（2秒→4秒→8秒...）
-   - 默认最大重试3次，可在任务中自定义
+- `bili_users`
+- `monitor_tasks`
+- `monitor_targets`
+- `keyword_rules`
+- `whitelist_users`
+- `app_settings`
+- `monitor_logs`
+- `report_records`
 
-3. **监控配置建议**：
-   - 监控间隔建议≥300秒，避免触发B站风控
-   - 视频数量：1-20条（建议5-10条）
-   - 评论数量：10-200条（建议50-100条）
+当前版本不承诺兼容旧数据库结构。如果需要全新初始化，可以停止服务后删除 `DB_PATH` 指向的数据库文件，再重新启动。
 
-4. Cookie通常30天有效，过期需重新登录
+## CI/CD
 
-5. 系统默认使用"传谣类"举报理由（reason=11）
+GitHub Actions 已使用 Node.js 24 runtime 版本的官方 actions，并显式设置：
 
-6. 建议使用小号进行监控和举报操作
-
-7. 代理格式：
-   - HTTP: `http://host:port`
-   - SOCKS5: `socks5://host:port`
-   - 带认证: `http://user:pass@host:port`
-
-8. **Docker部署**：
-   - Docker部署前后端在同一端口（8080）
-   - 数据库文件保存在容器内 `/app/data` 目录，建议挂载卷持久化
-   - 支持多架构：amd64和arm64
-   - 容器自带健康检查，确保服务可用性
-
-## Docker镜像
-
-### 官方镜像
-
-```bash
-docker pull spiritlhl/goban:latest
+```yaml
+FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 ```
 
-### 支持的标签
+Release workflow 会构建前端产物和多平台后端二进制；Docker workflow 会构建并推送 `linux/amd64` 和 `linux/arm64` 镜像。
 
-- `latest` - 最新稳定版本
-- `v1.x.x` - 特定版本号
-- `main` - 主分支最新构建
+## 常见问题
 
-### 多架构支持
+### Docker 健康检查失败
 
-镜像支持以下架构：
-- `linux/amd64` - x86_64架构
-- `linux/arm64` - ARM64架构（适用于Raspberry Pi 4、Apple Silicon等）
+请确认容器内服务已启动，并检查 `/health` 是否返回：
+
+```json
+{"status":"ok"}
+```
+
+### Cookie 失效
+
+在“B站账号”中点击“检测”。如果显示失效，请删除账号后重新登录。
+
+### 正则规则无法保存
+
+保存时后端会编译正则表达式。请确认正则语法有效；普通关键词不需要转义。
+
+### 举报记录没有新增
+
+可能原因包括评论未命中规则、用户在白名单中、评论已举报过、B 站 API 限流、Cookie 失效或举报接口返回错误。请查看“监控日志”和任务的“最近异常”。
 
 ## 致谢
 
-参考项目：
 - [bilibili-API-collect](https://github.com/AkagiYui/bilibili-API-collect)
 - [gobup](https://github.com/spiritLHLS/gobup)
 
-## 免责声明
+## 许可证
 
-本项目仅供学习交流使用。使用本工具产生的任何后果由使用者自行承担。
+见 [LICENSE](./LICENSE)。

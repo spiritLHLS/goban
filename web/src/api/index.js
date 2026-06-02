@@ -50,6 +50,7 @@ export const userAPI = {
   loginCheck: (key) => request.get('/users/loginCheck', { params: { key } }),
   loginCancel: (key) => request.get('/users/loginCancel', { params: { key } }),
   loginByCookie: (cookies) => request.post('/users/loginByCookie', { cookies }),
+  check: (id) => request.post(`/users/${id}/check`),
   delete: (id) => request.delete(`/users/${id}`)
 }
 
@@ -63,5 +64,30 @@ export const taskAPI = {
 
 export const logAPI = {
   monitor: (params) => request.get('/logs/monitor', { params }),
-  report: (params) => request.get('/logs/report', { params })
+  report: (params) => request.get('/logs/report', { params }),
+  exportReport: (params) => request.get('/logs/report/export', { params, responseType: 'blob' })
+}
+
+export const keywordAPI = {
+  list: () => request.get('/keywords/list'),
+  create: (data) => request.post('/keywords/create', data),
+  update: (id, data) => request.put(`/keywords/${id}`, data),
+  delete: (id) => request.delete(`/keywords/${id}`),
+  preview: (data) => request.post('/keywords/preview', data)
+}
+
+export const whitelistAPI = {
+  list: () => request.get('/whitelist/list'),
+  create: (data) => request.post('/whitelist/create', data),
+  update: (id, data) => request.put(`/whitelist/${id}`, data),
+  delete: (id) => request.delete(`/whitelist/${id}`)
+}
+
+export const settingsAPI = {
+  get: () => request.get('/settings'),
+  update: (data) => request.put('/settings', data)
+}
+
+export const statusAPI = {
+  get: () => request.get('/status')
 }

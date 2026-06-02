@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand"
 	"net/url"
 	"sort"
 	"strings"
@@ -117,22 +118,23 @@ func (c *BiliClient) SetRetryPolicy(maxRetries, retryInterval int) {
 // retryWithBackoff 使用指数退避策略重试函数
 func (c *BiliClient) retryWithBackoff(operation func() error) error {
 	var lastErr error
-	
+
 	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
 		lastErr = operation()
-		
+
 		if lastErr == nil {
 			return nil
 		}
-		
+
 		if attempt < c.MaxRetries {
 			// 计算退避时间：基础间隔 * 2^尝试次数
 			backoffTime := time.Duration(c.RetryInterval) * time.Second * time.Duration(math.Pow(2, float64(attempt)))
+			backoffTime += time.Duration(rand.Intn(500)) * time.Millisecond
 			log.Printf("[重试] 第 %d 次尝试失败，%v 后重试: %v", attempt+1, backoffTime, lastErr)
 			time.Sleep(backoffTime)
 		}
 	}
-	
+
 	return fmt.Errorf("重试 %d 次后仍然失败: %w", c.MaxRetries, lastErr)
 }
 
@@ -230,18 +232,18 @@ type VideoListResponse struct {
 }
 
 type VideoInfo struct {
-	AID    int64  `json:"aid"`
-	BVID   string `json:"bvid"`
-	Title  string `json:"title"`
-	Author string `json:"author"`
-	Mid    int64  `json:"mid"`
-	Created int64 `json:"created"`
+	AID     int64  `json:"aid"`
+	BVID    string `json:"bvid"`
+	Title   string `json:"title"`
+	Author  string `json:"author"`
+	Mid     int64  `json:"mid"`
+	Created int64  `json:"created"`
 }
 
 // GetUserVideos 获取用户投稿视频列表（带重试）
 func (c *BiliClient) GetUserVideos(mid int64, pageSize int) ([]VideoInfo, error) {
 	var videos []VideoInfo
-	
+
 	err := c.retryWithBackoff(func() error {
 		apiURL := fmt.Sprintf("https://api.bilibili.com/x/space/wbi/arc/search?mid=%d&ps=%d&pn=1", mid, pageSize)
 
@@ -265,7 +267,7 @@ func (c *BiliClient) GetUserVideos(mid int64, pageSize int) ([]VideoInfo, error)
 		videos = resp.Data.List.Vlist
 		return nil
 	})
-	
+
 	return videos, err
 }
 
@@ -279,10 +281,10 @@ type CommentListResponse struct {
 }
 
 type CommentInfo struct {
-	RPID    int64  `json:"rpid"`
-	OID     int64  `json:"oid"`
-	Type    int    `json:"type"`
-	Mid     int64  `json:"mid"`
+	RPID    int64 `json:"rpid"`
+	OID     int64 `json:"oid"`
+	Type    int   `json:"type"`
+	Mid     int64 `json:"mid"`
 	Content struct {
 		Message string `json:"message"`
 	} `json:"content"`
@@ -293,13 +295,45 @@ type CommentInfo struct {
 	CTime int64 `json:"ctime"`
 }
 
-// GetVideoComments 获取视频评论（带重试）
+// GetVideoComments 获取视频评论（带分页和重试）
 func (c *BiliClient) GetVideoComments(oid int64, pageSize int) ([]CommentInfo, error) {
+	if pageSize <= 0 {
+		return []CommentInfo{}, nil
+	}
+
+	comments := make([]CommentInfo, 0, pageSize)
+	page := 1
+	for len(comments) < pageSize {
+		remaining := pageSize - len(comments)
+		requestSize := min(remaining, 50)
+
+		pageComments, err := c.getVideoCommentsPage(oid, page, requestSize)
+		if err != nil {
+			return comments, err
+		}
+		if len(pageComments) == 0 {
+			break
+		}
+
+		comments = append(comments, pageComments...)
+		if len(pageComments) < requestSize {
+			break
+		}
+		page++
+	}
+
+	if len(comments) > pageSize {
+		comments = comments[:pageSize]
+	}
+	return comments, nil
+}
+
+func (c *BiliClient) getVideoCommentsPage(oid int64, page, pageSize int) ([]CommentInfo, error) {
 	var comments []CommentInfo
-	
+
 	err := c.retryWithBackoff(func() error {
 		// type=1 表示视频评论
-		apiURL := fmt.Sprintf("https://api.bilibili.com/x/v2/reply?type=1&oid=%d&ps=%d&pn=1&sort=2", oid, pageSize)
+		apiURL := fmt.Sprintf("https://api.bilibili.com/x/v2/reply?type=1&oid=%d&ps=%d&pn=%d&sort=2", oid, pageSize, page)
 
 		var resp CommentListResponse
 		r, err := c.ReqClient.R().
@@ -331,7 +365,7 @@ func (c *BiliClient) GetVideoComments(oid int64, pageSize int) ([]CommentInfo, e
 		comments = resp.Data.Replies
 		return nil
 	})
-	
+
 	return comments, err
 }
 
@@ -391,7 +425,7 @@ func (c *BiliClient) ReportComment(oid, rpid int64, reason int) error {
 // GetUPInfo 获取UP主信息（带重试）
 func (c *BiliClient) GetUPInfo(mid int64) (string, error) {
 	var upName string
-	
+
 	err := c.retryWithBackoff(func() error {
 		apiURL := fmt.Sprintf("https://api.bilibili.com/x/space/acc/info?mid=%d", mid)
 
@@ -422,7 +456,7 @@ func (c *BiliClient) GetUPInfo(mid int64) (string, error) {
 		upName = result.Data.Name
 		return nil
 	})
-	
+
 	return upName, err
 }
 
@@ -500,8 +534,8 @@ func GenerateTVQRCode() (*QRCodeResponse, error) {
 	apiURL := "https://passport.bilibili.com/x/passport-tv-login/qrcode/auth_code"
 
 	log.Printf("[TV_QR] 请求URL: %s", apiURL)
-	log.Printf("[TV_QR] 请求参数: appkey=%s, local_id=%s, ts=%s, sign=%s",
-		params["appkey"], params["local_id"], params["ts"], params["sign"])
+	log.Printf("[TV_QR] 请求参数: appkey=%s, local_id=%s, ts=%s",
+		params["appkey"], params["local_id"], params["ts"])
 
 	var qrResp QRCodeResponse
 	client := req.C().ImpersonateChrome()
@@ -517,9 +551,6 @@ func GenerateTVQRCode() (*QRCodeResponse, error) {
 		return nil, fmt.Errorf("请求二维码失败: %w", err)
 	}
 
-	rawBody := resp.String()
-	log.Printf("[TV_QR_DEBUG] 原始响应: %s", rawBody)
-
 	if err := resp.UnmarshalJson(&qrResp); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
@@ -528,7 +559,7 @@ func GenerateTVQRCode() (*QRCodeResponse, error) {
 		return nil, fmt.Errorf("生成TV端二维码失败 code=%d msg=%s", qrResp.Code, qrResp.Message)
 	}
 
-	log.Printf("[TV_QR] 生成成功 - url: %s, auth_code: %s", qrResp.Data.URL, qrResp.Data.AuthCode)
+	log.Println("[TV_QR] 生成成功")
 
 	return &qrResp, nil
 }
@@ -545,7 +576,7 @@ func PollTVQRCodeStatus(authCode string) (*QRCodePollResponse, error) {
 	params = signParams(params)
 	apiURL := "https://passport.bilibili.com/x/passport-tv-login/qrcode/poll"
 
-	log.Printf("[TV_POLL] 轮询 authCode: %s", authCode)
+	log.Println("[TV_POLL] 轮询二维码状态")
 
 	var pollResp QRCodePollResponse
 	client := req.C().ImpersonateChrome()
@@ -561,9 +592,6 @@ func PollTVQRCodeStatus(authCode string) (*QRCodePollResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("轮询状态失败: %w", err)
 	}
-
-	rawBody := resp.String()
-	log.Printf("[TV_POLL_DEBUG] 原始响应: %s", rawBody)
 
 	if err := resp.UnmarshalJson(&pollResp); err != nil {
 		return nil, fmt.Errorf("解析轮询响应失败: %w", err)
@@ -617,10 +645,6 @@ func PollWebQRCodeStatus(oauthKey string) (*QRCodePollResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("轮询状态失败: %w", err)
 	}
-
-	// 打印原始响应用于调试
-	rawBody := resp.String()
-	log.Printf("[WEB_POLL_DEBUG] 原始响应: %s", rawBody)
 
 	if err := resp.UnmarshalJson(&pollResp); err != nil {
 		return nil, fmt.Errorf("解析轮询响应失败: %w", err)

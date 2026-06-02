@@ -3,6 +3,8 @@ server/goban
 server/goban.exe
 server/*.db
 server/*.sqlite*
+server/data/
+data/
 
 # Frontend artifacts  
 web/dist/

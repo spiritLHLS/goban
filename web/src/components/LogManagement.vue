@@ -12,9 +12,12 @@
       <el-table-column label="任务" width="200">
         <template #default="{ row }">
           <div v-if="row.task">
-            <div>{{ row.task.target_uname }}</div>
+            <div>{{ row.task.name || row.task.id }}</div>
             <div style="font-size: 12px; color: #909399;">
               使用: {{ row.task.user?.uname }}
+            </div>
+            <div style="font-size: 12px; color: #909399;">
+              UP: {{ targetNames(row.task) }}
             </div>
           </div>
         </template>
@@ -83,6 +86,12 @@ const formatTime = (time) => {
   if (!time) return '-'
   const date = new Date(time)
   return date.toLocaleString('zh-CN')
+}
+
+const targetNames = (task) => {
+  const targets = task?.targets || []
+  if (targets.length === 0) return '-'
+  return targets.map(target => target.uname || target.uid).join('、')
 }
 
 onMounted(() => {

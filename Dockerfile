@@ -1,31 +1,28 @@
 # 多阶段构建 - 构建前端
-FROM node:18-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 
 WORKDIR /app/web
 COPY web/package*.json ./
-RUN npm install
+RUN npm ci
 COPY web/ ./
 RUN npm run build
 
 # 多阶段构建 - 构建后端
 FROM golang:1.24-alpine AS backend-builder
 
-# 安装构建依赖
-RUN apk add --no-cache gcc g++ musl-dev sqlite-dev
-
 WORKDIR /app
 COPY server/go.mod server/go.sum ./
 RUN go mod download
 
 COPY server/ ./
-# 使用CGO编译以支持SQLite
-RUN CGO_ENABLED=1 GOOS=linux go build -a -ldflags '-linkmode external -extldflags "-static"' -o goban .
+# 使用纯Go SQLite驱动，关闭CGO便于跨平台和多架构构建
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-s -w' -o goban .
 
 # 最终运行镜像
 FROM alpine:latest
 
 # 安装必要的运行时依赖
-RUN apk --no-cache add ca-certificates tzdata sqlite-libs
+RUN apk --no-cache add ca-certificates tzdata wget
 
 WORKDIR /app
 
@@ -48,10 +45,11 @@ RUN mkdir -p /app/data
 ENV PORT=8080
 ENV USERNAME=admin
 ENV PASSWORD=admin123
+ENV DB_PATH=/app/data/goban.db
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/api/users/list || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
 # 启动应用
 CMD ["./goban"]

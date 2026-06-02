@@ -25,6 +25,7 @@ func SetupRoutes(router *gin.Engine) {
 				users.GET("/loginCheck", controllers.LoginCheck)
 				users.GET("/loginCancel", controllers.LoginCancel)
 				users.POST("/loginByCookie", controllers.LoginByCookie)
+				users.POST("/:id/check", controllers.CheckBiliUserCookie)
 				users.DELETE("/:id", controllers.DeleteBiliUser)
 			}
 
@@ -38,11 +39,36 @@ func SetupRoutes(router *gin.Engine) {
 				tasks.GET("/:id/test", controllers.TestMonitorTask)
 			}
 
+			// 关键字规则管理
+			keywords := auth.Group("/keywords")
+			{
+				keywords.GET("/list", controllers.ListKeywordRules)
+				keywords.POST("/create", controllers.CreateKeywordRule)
+				keywords.POST("/preview", controllers.PreviewKeywordRules)
+				keywords.PUT("/:id", controllers.UpdateKeywordRule)
+				keywords.DELETE("/:id", controllers.DeleteKeywordRule)
+			}
+
+			// 白名单管理
+			whitelist := auth.Group("/whitelist")
+			{
+				whitelist.GET("/list", controllers.ListWhitelistUsers)
+				whitelist.POST("/create", controllers.CreateWhitelistUser)
+				whitelist.PUT("/:id", controllers.UpdateWhitelistUser)
+				whitelist.DELETE("/:id", controllers.DeleteWhitelistUser)
+			}
+
+			// 系统配置和状态
+			auth.GET("/settings", controllers.GetSettings)
+			auth.PUT("/settings", controllers.UpdateSettings)
+			auth.GET("/status", controllers.GetMonitorStatus)
+
 			// 日志和记录
 			logs := auth.Group("/logs")
 			{
 				logs.GET("/monitor", controllers.GetMonitorLogs)
 				logs.GET("/report", controllers.GetReportRecords)
+				logs.GET("/report/export", controllers.ExportReportRecords)
 			}
 		}
 	}
@@ -58,7 +84,7 @@ func SetupRoutes(router *gin.Engine) {
 	if _, err := os.Stat(distPath); err == nil {
 		// 服务静态文件
 		router.StaticFS("/assets", http.Dir(filepath.Join(distPath, "assets")))
-		
+
 		// SPA路由处理 - 所有非API和非静态文件的请求都返回index.html
 		router.NoRoute(func(c *gin.Context) {
 			c.File(filepath.Join(distPath, "index.html"))
