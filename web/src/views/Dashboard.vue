@@ -58,6 +58,7 @@ import KeywordManagement from '@/components/KeywordManagement.vue'
 import WhitelistManagement from '@/components/WhitelistManagement.vue'
 import ConfigManagement from '@/components/ConfigManagement.vue'
 import StatusOverview from '@/components/StatusOverview.vue'
+import { clearCredentials } from '@/utils/authStorage'
 
 const router = useRouter()
 const activeMenu = ref('status')
@@ -87,8 +88,7 @@ const handleLogout = async () => {
       type: 'warning'
     })
     
-    localStorage.removeItem('username')
-    localStorage.removeItem('password')
+    clearCredentials()
     router.push('/login')
   } catch {
     // 取消

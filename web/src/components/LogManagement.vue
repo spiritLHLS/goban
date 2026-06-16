@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <el-table :data="logs" style="width: 100%" v-loading="loading">
+    <el-table :data="logs" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无监控日志'">
       <el-table-column prop="id" label="ID" width="60" />
       <el-table-column label="任务" width="200">
         <template #default="{ row }">
@@ -33,6 +33,17 @@
         </template>
       </el-table-column>
       <el-table-column prop="message" label="消息" />
+      <el-table-column label="重复" width="90">
+        <template #default="{ row }">
+          <el-tag v-if="row.repeat_count > 1" size="small" type="warning">x{{ row.repeat_count }}</el-tag>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="最后出现" width="180">
+        <template #default="{ row }">
+          {{ formatTime(row.last_seen_at) }}
+        </template>
+      </el-table-column>
       <el-table-column label="时间" width="180">
         <template #default="{ row }">
           {{ formatTime(row.created_at) }}

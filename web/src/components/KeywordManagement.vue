@@ -23,7 +23,7 @@
       </div>
     </div>
 
-    <el-table :data="rules" style="width: 100%" v-loading="loading">
+    <el-table :data="rules" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无关键字规则'">
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column prop="pattern" label="匹配内容" min-width="220" show-overflow-tooltip />
       <el-table-column label="类型" width="90">
@@ -32,6 +32,9 @@
             {{ row.match_type === 'regex' ? '正则' : '普通' }}
           </el-tag>
         </template>
+      </el-table-column>
+      <el-table-column label="关系" width="90">
+        <template #default="{ row }">{{ matchLogicLabel(row.match_logic) }}</template>
       </el-table-column>
       <el-table-column label="大小写" width="90">
         <template #default="{ row }">{{ row.case_sensitive ? '敏感' : '不敏感' }}</template>
@@ -67,6 +70,13 @@
         <el-form-item label="匹配内容">
           <el-input v-model="form.pattern" type="textarea" :rows="3" placeholder="普通关键词或正则表达式" />
         </el-form-item>
+        <el-form-item label="条件关系">
+          <el-radio-group v-model="form.match_logic">
+            <el-radio-button v-for="option in matchLogicOptions" :key="option.value" :label="option.value">
+              {{ option.label }}
+            </el-radio-button>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="大小写敏感">
           <el-switch v-model="form.case_sensitive" />
         </el-form-item>
@@ -87,8 +97,9 @@
 
 <script setup>
 import { onMounted, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { keywordAPI } from '@/api'
+import { buildDeleteConfirmation } from '@/utils/deleteConfirm'
 
 const rules = ref([])
 const loading = ref(false)
@@ -104,6 +115,12 @@ const matchTypeOptions = [
   { label: '正则', value: 'regex' }
 ]
 
+const matchLogicOptions = [
+  { label: '单条', value: 'single' },
+  { label: '任一', value: 'or' },
+  { label: '全部', value: 'and' }
+]
+
 const form = ref(defaultForm())
 
 function defaultForm() {
@@ -111,6 +128,7 @@ function defaultForm() {
     name: '',
     pattern: '',
     match_type: 'plain',
+    match_logic: 'single',
     case_sensitive: false,
     enabled: true,
     description: ''
@@ -137,7 +155,7 @@ const openCreate = () => {
 
 const openEdit = (row) => {
   editingRule.value = row
-  form.value = { ...row }
+  form.value = { ...row, match_logic: row.match_logic || 'single' }
   dialogVisible.value = true
 }
 
@@ -165,8 +183,8 @@ const handleSubmit = async () => {
 
 const handleDelete = async (row) => {
   try {
-    await ElMessageBox.confirm(`确定删除规则 ${row.name} 吗？`, '提示', { type: 'warning' })
-    await keywordAPI.delete(row.id)
+    const params = await buildDeleteConfirmation(row, '规则', row.name || String(row.id))
+    await keywordAPI.delete(row.id, params)
     ElMessage.success('删除成功')
     await loadRules()
   } catch (error) {
@@ -185,10 +203,7 @@ const loadPreview = async () => {
     return
   }
   try {
-    const data = await keywordAPI.preview({
-      text: previewText.value,
-      use_enabled: true
-    })
+    const data = await keywordAPI.preview(buildPreviewPayload())
     if (data.error) {
       ElMessage.error(data.error)
       return
@@ -199,12 +214,42 @@ const loadPreview = async () => {
   }
 }
 
+const buildPreviewPayload = () => {
+  if (dialogVisible.value && form.value.pattern.trim()) {
+    return {
+      text: previewText.value,
+      name: form.value.name,
+      pattern: form.value.pattern,
+      match_type: form.value.match_type,
+      match_logic: form.value.match_logic,
+      case_sensitive: form.value.case_sensitive,
+      use_enabled: false
+    }
+  }
+  return {
+    text: previewText.value,
+    use_enabled: true
+  }
+}
+
 const formatTime = (time) => {
   if (!time) return '-'
   return new Date(time).toLocaleString('zh-CN')
 }
 
-watch(previewText, schedulePreview)
+const matchLogicLabel = (value) => {
+  const option = matchLogicOptions.find(item => item.value === value)
+  return option ? option.label : '单条'
+}
+
+watch([
+  previewText,
+  dialogVisible,
+  () => form.value.pattern,
+  () => form.value.match_type,
+  () => form.value.match_logic,
+  () => form.value.case_sensitive
+], schedulePreview)
 
 onMounted(loadRules)
 </script>

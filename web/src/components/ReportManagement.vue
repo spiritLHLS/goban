@@ -41,7 +41,7 @@
       </el-form-item>
     </el-form>
 
-    <el-table :data="reports" style="width: 100%" v-loading="loading">
+    <el-table :data="reports" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无举报记录'">
       <el-table-column prop="id" label="ID" width="60" />
       <el-table-column label="任务" width="150">
         <template #default="{ row }">{{ row.task?.name || row.task_id }}</template>

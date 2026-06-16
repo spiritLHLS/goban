@@ -9,8 +9,10 @@ services:
       - "38080:8080"
     environment:
       - PORT=8080
-      - USERNAME=admin
-      - PASSWORD=admin123
+      - GOBAN_USERNAME=${GOBAN_USERNAME:-admin}
+      - PASSWORD=${PASSWORD:-}
+      - GOBAN_SECRET_KEY=${GOBAN_SECRET_KEY:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       - DB_PATH=/app/data/goban.db
       - TZ=Asia/Shanghai
     volumes:

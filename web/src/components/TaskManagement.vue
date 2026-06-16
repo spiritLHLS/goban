@@ -8,7 +8,7 @@
       </div>
     </div>
 
-    <el-table :data="tasks" style="width: 100%" v-loading="loading">
+    <el-table :data="tasks" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无监控任务'">
       <el-table-column prop="id" label="ID" width="60" />
       <el-table-column prop="name" label="任务" min-width="150" />
       <el-table-column label="使用账号" width="140">
@@ -16,9 +16,18 @@
       </el-table-column>
       <el-table-column label="监控UP主" min-width="180">
         <template #default="{ row }">
-          <el-tag v-for="target in row.targets" :key="target.id" size="small" style="margin: 2px">
-            {{ target.uname || target.uid }}
-          </el-tag>
+          <div class="target-list">
+            <el-tag
+              v-for="target in row.targets"
+              :key="target.id"
+              size="small"
+              :type="statusType(target.last_status)"
+              :title="target.last_error || target.last_status || 'created'"
+            >
+              {{ target.uname || target.uid }} · {{ target.last_status || 'created' }}
+              <span v-if="target.checked_comments">({{ target.checked_comments }}/{{ target.matched_comments || 0 }}/{{ target.report_count || 0 }})</span>
+            </el-tag>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="规则" min-width="160">
@@ -32,10 +41,23 @@
           <div class="mini">匹配 {{ row.matched_comments || 0 }} / 举报 {{ row.report_count || 0 }}</div>
         </template>
       </el-table-column>
+      <el-table-column label="进度" min-width="240">
+        <template #default="{ row }">
+          <el-progress :percentage="progressPercent(row)" :status="progressStatus(row)" :stroke-width="8" />
+          <div class="mini progress-message">{{ row.progress_message || row.last_error || '-' }}</div>
+          <div class="mini">下次 {{ formatTime(row.next_run_at) }}</div>
+          <div class="recent-log" v-for="log in recentLogs(row)" :key="log.id">
+            <el-tag size="small" :type="statusType(log.level)">{{ log.level }}</el-tag>
+            <span>{{ log.message }}</span>
+            <span v-if="log.repeat_count > 1" class="muted">x{{ log.repeat_count }}</span>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column label="配置" width="210">
         <template #default="{ row }">
           <div class="mini">视频 {{ row.video_count }} | 评论 {{ row.comment_count }}</div>
-          <div class="mini">检查 {{ row.interval }}秒 | 举报 {{ row.report_delay || 6 }}秒</div>
+          <div class="mini">检查 {{ row.interval }}秒 | 举报 {{ row.report_delay || 30 }}秒</div>
+          <div class="mini">每日上限 {{ row.daily_report_limit || 100 }}</div>
           <div class="mini">重试 {{ row.max_retries }}次，间隔 {{ row.retry_interval }}秒</div>
           <el-tag v-if="row.proxy_url" size="small" type="success">代理</el-tag>
         </template>
@@ -50,10 +72,14 @@
       <el-table-column label="最后检查" width="180">
         <template #default="{ row }">{{ formatTime(row.last_check) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="220" fixed="right">
+      <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" @click="handleTest(row)" :loading="testingId === row.id">测试</el-button>
+          <el-button v-if="row.enabled" size="small" @click="handleStatus(row, 'disable')">暂停</el-button>
+          <el-button v-else size="small" type="success" @click="handleStatus(row, 'enable')">启用</el-button>
+          <el-button size="small" @click="handleStatus(row, 'retry_now')">重试</el-button>
+          <el-button size="small" @click="handleStatus(row, 'reset_stats')">重置</el-button>
           <el-button type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -88,7 +114,7 @@
             <el-option
               v-for="rule in keywordRules"
               :key="rule.id"
-              :label="`${rule.name} (${rule.match_type === 'regex' ? '正则' : '普通'})`"
+              :label="`${rule.name} (${rule.match_type === 'regex' ? '正则' : '普通'} · ${matchLogicLabel(rule.match_logic)})`"
               :value="rule.id"
               :disabled="!rule.enabled"
             />
@@ -113,8 +139,11 @@
           <span class="unit">秒</span>
         </el-form-item>
         <el-form-item label="举报间隔">
-          <el-input-number v-model="form.report_delay" :min="6" :max="600" />
+          <el-input-number v-model="form.report_delay" :min="30" :max="600" />
           <span class="unit">秒</span>
+        </el-form-item>
+        <el-form-item label="每日举报上限">
+          <el-input-number v-model="form.daily_report_limit" :min="1" :max="5000" />
         </el-form-item>
         <el-form-item label="最大重试">
           <el-input-number v-model="form.max_retries" :min="0" :max="10" />
@@ -159,11 +188,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { keywordAPI, taskAPI, userAPI } from '@/api'
+import { buildDeleteConfirmation } from '@/utils/deleteConfirm'
 
 const tasks = ref([])
+const taskProgress = ref(new Map())
 const users = ref([])
 const keywordRules = ref([])
 const loading = ref(false)
@@ -174,6 +205,7 @@ const submitting = ref(false)
 const testingId = ref(null)
 const testResult = ref(null)
 const form = ref(defaultForm())
+let refreshTimer = null
 
 function defaultForm() {
   return {
@@ -186,7 +218,8 @@ function defaultForm() {
     keyword_rule_ids: [],
     interval: 300,
     proxy_url: '',
-    report_delay: 6,
+    report_delay: 30,
+    daily_report_limit: 100,
     max_retries: 3,
     retry_interval: 2,
     enabled: true
@@ -194,8 +227,9 @@ function defaultForm() {
 }
 
 const loadTasks = async () => {
-  const data = await taskAPI.list()
-  tasks.value = data
+  const data = await taskAPI.progress()
+  taskProgress.value = new Map((data || []).map(item => [item.task.id, item]))
+  tasks.value = (data || []).map(item => item.task)
 }
 
 const loadUsers = async () => {
@@ -234,7 +268,8 @@ const openEdit = (row) => {
     keyword_rule_ids: parseRuleIDs(row.keyword_rule_ids),
     interval: row.interval,
     proxy_url: row.proxy_url || '',
-    report_delay: row.report_delay || 6,
+    report_delay: row.report_delay || 30,
+    daily_report_limit: row.daily_report_limit || 100,
     max_retries: row.max_retries ?? 3,
     retry_interval: row.retry_interval || 2,
     enabled: row.enabled
@@ -264,6 +299,7 @@ const handleSubmit = async () => {
     interval: form.value.interval,
     proxy_url: form.value.proxy_url,
     report_delay: form.value.report_delay,
+    daily_report_limit: form.value.daily_report_limit,
     max_retries: form.value.max_retries,
     retry_interval: form.value.retry_interval,
     enabled: form.value.enabled
@@ -303,10 +339,20 @@ const handleTest = async (row) => {
   }
 }
 
+const handleStatus = async (row, action) => {
+  try {
+    await taskAPI.updateStatus(row.id, { action })
+    ElMessage.success('状态已更新')
+    await loadTasks()
+  } catch (error) {
+    ElMessage.error('状态更新失败')
+  }
+}
+
 const handleDelete = async (row) => {
   try {
-    await ElMessageBox.confirm(`确定删除任务 ${row.name || row.id} 吗？`, '提示', { type: 'warning' })
-    await taskAPI.delete(row.id)
+    const params = await buildDeleteConfirmation(row, '任务', row.name || String(row.id))
+    await taskAPI.delete(row.id, params)
     ElMessage.success('删除成功')
     await loadTasks()
   } catch (error) {
@@ -345,7 +391,34 @@ const statusType = (value) => {
   if (value === 'warning') return 'warning'
   if (value === 'error') return 'danger'
   if (value === 'running') return 'primary'
+  if (value === 'paused') return 'info'
+  if (value === 'backoff') return 'warning'
   return 'info'
+}
+
+const progressPercent = (row) => {
+  const item = taskProgress.value.get(row.id)
+  if (item?.progress_percent !== undefined) return item.progress_percent
+  if (!row.progress_total) return row.last_status === 'success' ? 100 : 0
+  return Math.min(100, Math.max(0, Math.floor((row.progress_done || 0) * 100 / row.progress_total)))
+}
+
+const progressStatus = (row) => {
+  if (row.last_status === 'success') return 'success'
+  if (row.last_status === 'error') return 'exception'
+  if (row.last_status === 'warning' || row.last_status === 'backoff') return 'warning'
+  return undefined
+}
+
+const recentLogs = (row) => taskProgress.value.get(row.id)?.recent_logs || []
+
+const matchLogicLabel = (value) => {
+  const labels = {
+    single: '单条',
+    or: '任一',
+    and: '全部'
+  }
+  return labels[value] || '单条'
 }
 
 const formatTime = (time) => {
@@ -353,7 +426,14 @@ const formatTime = (time) => {
   return new Date(time).toLocaleString('zh-CN')
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  loadAll()
+  refreshTimer = setInterval(loadTasks, 8000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+})
 </script>
 
 <style scoped>
@@ -374,16 +454,39 @@ onMounted(loadAll)
 }
 
 .actions,
-.match-list {
+.match-list,
+.target-list {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.target-list {
+  gap: 4px;
 }
 
 .mini {
   font-size: 12px;
   color: #606266;
   line-height: 1.6;
+}
+
+.progress-message,
+.recent-log {
+  overflow-wrap: anywhere;
+}
+
+.recent-log {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.muted {
+  color: #909399;
 }
 
 .unit {

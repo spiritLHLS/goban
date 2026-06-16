@@ -16,7 +16,7 @@ var db *gorm.DB
 func InitDB() error {
 	var err error
 	cfg := config.GetConfig()
-	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0750); err != nil {
 		return fmt.Errorf("创建数据库目录失败: %w", err)
 	}
 
@@ -25,10 +25,15 @@ func InitDB() error {
 		return err
 	}
 	if sqlDB, err := db.DB(); err == nil {
-		sqlDB.SetMaxOpenConns(1)
+		sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
+		sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
+		sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
 	}
 	db.Exec("PRAGMA journal_mode=WAL")
 	db.Exec("PRAGMA busy_timeout=5000")
+	if err := os.Chmod(cfg.DBPath, 0600); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("设置数据库文件权限失败: %w", err)
+	}
 
 	// 自动迁移数据库表
 	if err := db.AutoMigrate(
@@ -53,16 +58,21 @@ func GetDB() *gorm.DB {
 
 func seedDefaultSettings(db *gorm.DB) error {
 	defaults := map[string]string{
-		"default_video_count":    "5",
-		"default_comment_count":  "50",
-		"default_interval":       "300",
-		"default_report_delay":   "6",
-		"default_max_retries":    "3",
-		"default_retry_interval": "2",
-		"cookie_check_interval":  "3600",
-		"webhook_enabled":        "false",
-		"webhook_type":           "none",
-		"webhook_timeout":        "8",
+		"default_video_count":        "5",
+		"default_comment_count":      "50",
+		"default_interval":           "300",
+		"default_report_delay":       "30",
+		"default_daily_report_limit": "100",
+		"default_max_retries":        "3",
+		"default_retry_interval":     "2",
+		"cookie_check_interval":      "3600",
+		"cookie_refresh_interval":    "21600",
+		"log_dedupe_window_seconds":  "300",
+		"risk_backoff_base_seconds":  "1800",
+		"risk_backoff_max_seconds":   "86400",
+		"webhook_enabled":            "false",
+		"webhook_type":               "none",
+		"webhook_timeout":            "8",
 	}
 
 	for key, value := range defaults {

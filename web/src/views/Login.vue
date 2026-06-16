@@ -25,8 +25,8 @@
       <el-alert v-if="errorMsg" :title="errorMsg" type="error" :closable="false" style="margin-top: 10px" />
 
       <div class="hint">
-        <p>默认账号: admin / admin123</p>
-        <p>可通过环境变量 USERNAME 和 PASSWORD 修改</p>
+        <p>用户名默认 admin，可通过 GOBAN_USERNAME 修改</p>
+        <p>密码来自 PASSWORD，未设置时查看 data/.goban_admin_password</p>
       </div>
     </el-card>
   </div>
@@ -37,6 +37,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
+import { setCredentials } from '@/utils/authStorage'
 
 const router = useRouter()
 const formRef = ref(null)
@@ -73,16 +74,17 @@ const handleLogin = async () => {
     })
     
     // 认证成功，保存凭证
-    localStorage.setItem('username', form.username)
-    localStorage.setItem('password', form.password)
+    setCredentials(form.username, form.password)
     
     ElMessage.success('登录成功')
     router.push('/')
   } catch (error) {
-    console.error('登录失败:', error)
-    if (error.response?.status === 401) {
-      errorMsg.value = '用户名或密码错误'
+    const status = error.response?.status
+    const message = error.response?.data?.message || error.response?.data?.error
+    if (status === 401 || status === 429) {
+      errorMsg.value = message || (status === 429 ? '登录失败次数过多，请稍后再试' : '用户名或密码错误')
     } else {
+      console.error('登录失败:', error)
       errorMsg.value = '登录失败，请检查网络连接'
     }
   } finally {

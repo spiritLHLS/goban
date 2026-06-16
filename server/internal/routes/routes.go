@@ -2,8 +2,10 @@ package routes
 
 import (
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spiritlhl/goban/internal/controllers"
@@ -33,7 +35,10 @@ func SetupRoutes(router *gin.Engine) {
 			tasks := auth.Group("/tasks")
 			{
 				tasks.GET("/list", controllers.ListMonitorTasks)
+				tasks.GET("/progress", controllers.ListTaskProgress)
 				tasks.POST("/create", controllers.CreateMonitorTask)
+				tasks.GET("/:id/progress", controllers.GetTaskProgress)
+				tasks.POST("/:id/status", controllers.UpdateTaskStatus)
 				tasks.PUT("/:id", controllers.UpdateMonitorTask)
 				tasks.DELETE("/:id", controllers.DeleteMonitorTask)
 				tasks.GET("/:id/test", controllers.TestMonitorTask)
@@ -62,6 +67,8 @@ func SetupRoutes(router *gin.Engine) {
 			auth.GET("/settings", controllers.GetSettings)
 			auth.PUT("/settings", controllers.UpdateSettings)
 			auth.GET("/status", controllers.GetMonitorStatus)
+			auth.GET("/docs", controllers.GetAPIDocs)
+			auth.GET("/docs/openapi.json", controllers.GetOpenAPISpec)
 
 			// 日志和记录
 			logs := auth.Group("/logs")
@@ -70,6 +77,20 @@ func SetupRoutes(router *gin.Engine) {
 				logs.GET("/report", controllers.GetReportRecords)
 				logs.GET("/report/export", controllers.ExportReportRecords)
 			}
+		}
+	}
+
+	pprofRoutes := router.Group("/debug/pprof")
+	pprofRoutes.Use(middleware.BasicAuth())
+	{
+		pprofRoutes.GET("/", gin.WrapF(pprof.Index))
+		pprofRoutes.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+		pprofRoutes.GET("/profile", gin.WrapF(pprof.Profile))
+		pprofRoutes.POST("/symbol", gin.WrapF(pprof.Symbol))
+		pprofRoutes.GET("/symbol", gin.WrapF(pprof.Symbol))
+		pprofRoutes.GET("/trace", gin.WrapF(pprof.Trace))
+		for _, name := range []string{"allocs", "block", "goroutine", "heap", "mutex", "threadcreate"} {
+			pprofRoutes.GET("/"+name, gin.WrapH(pprof.Handler(name)))
 		}
 	}
 
@@ -87,6 +108,15 @@ func SetupRoutes(router *gin.Engine) {
 
 		// SPA路由处理 - 所有非API和非静态文件的请求都返回index.html
 		router.NoRoute(func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if path == "/api" || strings.HasPrefix(path, "/api/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "API路由不存在"})
+				return
+			}
+			if path == "/debug" || strings.HasPrefix(path, "/debug/") {
+				c.JSON(http.StatusNotFound, gin.H{"error": "调试路由不存在"})
+				return
+			}
 			c.File(filepath.Join(distPath, "index.html"))
 		})
 	}

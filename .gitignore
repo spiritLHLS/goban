@@ -5,6 +5,15 @@ server/*.db
 server/*.sqlite*
 server/data/
 data/
+*.db
+*.sqlite*
+*.csv
+result.json
+screenshots/
+__pycache__/
+.env
+*.env
+.env.*
 
 # Frontend artifacts  
 web/dist/

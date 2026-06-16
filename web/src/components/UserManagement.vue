@@ -8,7 +8,7 @@
       </div>
     </div>
 
-    <el-table :data="users" style="width: 100%" v-loading="loading">
+    <el-table :data="users" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无B站账号'">
       <el-table-column prop="uid" label="UID" width="120" />
       <el-table-column label="头像" width="80">
         <template #default="{ row }">
@@ -106,8 +106,9 @@
 
 <script setup>
 import { ref, onUnmounted, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { userAPI } from '@/api'
+import { buildDeleteConfirmation } from '@/utils/deleteConfirm'
 
 const users = ref([])
 const loading = ref(false)
@@ -276,13 +277,8 @@ const handleCookieLogin = async () => {
 
 const handleDelete = async (row) => {
   try {
-    await ElMessageBox.confirm(`确定要删除账号 ${row.uname} 吗？`, '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning'
-    })
-    
-    await userAPI.delete(row.id)
+    const params = await buildDeleteConfirmation(row, '账号', row.uname || String(row.uid))
+    await userAPI.delete(row.id, params)
     ElMessage.success('删除成功')
     await loadUsers()
   } catch (error) {

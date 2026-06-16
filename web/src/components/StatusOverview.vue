@@ -16,7 +16,7 @@
       </el-col>
     </el-row>
 
-    <el-table :data="recentTasks" style="width: 100%" v-loading="loading">
+    <el-table :data="recentTasks" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无监控任务'">
       <el-table-column prop="name" label="任务" min-width="160" />
       <el-table-column label="UP主" min-width="180">
         <template #default="{ row }">
@@ -30,11 +30,20 @@
           <el-tag :type="statusType(row.last_status)" size="small">{{ row.last_status || 'created' }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="进度" width="190">
+        <template #default="{ row }">
+          <el-progress :percentage="progressPercent(row)" :status="progressStatus(row)" :stroke-width="8" />
+          <div class="mini">{{ row.progress_message || '-' }}</div>
+        </template>
+      </el-table-column>
       <el-table-column prop="checked_comments" label="已检测" width="100" />
       <el-table-column prop="matched_comments" label="已匹配" width="100" />
       <el-table-column prop="report_count" label="已举报" width="100" />
       <el-table-column label="最后检查" width="180">
         <template #default="{ row }">{{ formatTime(row.last_check) }}</template>
+      </el-table-column>
+      <el-table-column label="下次运行" width="180">
+        <template #default="{ row }">{{ formatTime(row.next_run_at) }}</template>
       </el-table-column>
       <el-table-column prop="last_error" label="最近异常" min-width="180" />
     </el-table>
@@ -78,7 +87,20 @@ const statusType = (value) => {
   if (value === 'warning') return 'warning'
   if (value === 'error') return 'danger'
   if (value === 'running') return 'primary'
+  if (value === 'backoff') return 'warning'
   return 'info'
+}
+
+const progressPercent = (row) => {
+  if (!row.progress_total) return row.last_status === 'success' ? 100 : 0
+  return Math.min(100, Math.max(0, Math.floor((row.progress_done || 0) * 100 / row.progress_total)))
+}
+
+const progressStatus = (row) => {
+  if (row.last_status === 'success') return 'success'
+  if (row.last_status === 'error') return 'exception'
+  if (row.last_status === 'warning' || row.last_status === 'backoff') return 'warning'
+  return undefined
 }
 
 const formatTime = (time) => {
@@ -131,5 +153,12 @@ onUnmounted(() => {
   margin-top: 6px;
   color: #909399;
   font-size: 12px;
+}
+
+.mini {
+  color: #606266;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 </style>

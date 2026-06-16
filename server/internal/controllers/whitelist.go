@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -19,20 +20,20 @@ type whitelistRequest struct {
 func ListWhitelistUsers(c *gin.Context) {
 	var rows []models.WhitelistUser
 	if err := database.GetDB().Order("created_at DESC").Find(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取白名单失败"})
+		respondError(c, http.StatusInternalServerError, "获取白名单失败")
 		return
 	}
-	c.JSON(http.StatusOK, rows)
+	respondOK(c, rows)
 }
 
 func CreateWhitelistUser(c *gin.Context) {
 	var req whitelistRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
+		respondError(c, http.StatusBadRequest, "请求参数错误")
 		return
 	}
 	if req.UID <= 0 && strings.TrimSpace(req.Uname) == "" {
-		c.JSON(http.StatusOK, gin.H{"error": "UID 和用户名至少填写一个"})
+		respondError(c, http.StatusBadRequest, "UID 和用户名至少填写一个")
 		return
 	}
 	enabled := true
@@ -46,22 +47,22 @@ func CreateWhitelistUser(c *gin.Context) {
 		Enabled: enabled,
 	}
 	if err := database.GetDB().Create(&row).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"error": "创建白名单失败: " + err.Error()})
+		respondError(c, http.StatusInternalServerError, "创建白名单失败: "+err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "创建成功", "user": row})
+	respondCreated(c, "创建成功", gin.H{"message": "创建成功", "user": row})
 }
 
 func UpdateWhitelistUser(c *gin.Context) {
 	var req whitelistRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误"})
+		respondError(c, http.StatusBadRequest, "请求参数错误")
 		return
 	}
 	db := database.GetDB()
 	var row models.WhitelistUser
 	if err := db.First(&row, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"error": "白名单不存在"})
+		respondError(c, http.StatusNotFound, "白名单不存在")
 		return
 	}
 	row.UID = req.UID
@@ -71,26 +72,34 @@ func UpdateWhitelistUser(c *gin.Context) {
 		row.Enabled = *req.Enabled
 	}
 	if row.UID <= 0 && row.Uname == "" {
-		c.JSON(http.StatusOK, gin.H{"error": "UID 和用户名至少填写一个"})
+		respondError(c, http.StatusBadRequest, "UID 和用户名至少填写一个")
 		return
 	}
 	if err := db.Save(&row).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"error": "更新白名单失败: " + err.Error()})
+		respondError(c, http.StatusInternalServerError, "更新白名单失败: "+err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "更新成功", "user": row})
+	respondCreated(c, "更新成功", gin.H{"message": "更新成功", "user": row})
 }
 
 func DeleteWhitelistUser(c *gin.Context) {
 	db := database.GetDB()
 	var row models.WhitelistUser
 	if err := db.First(&row, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"error": "白名单不存在"})
+		respondError(c, http.StatusNotFound, "白名单不存在")
+		return
+	}
+	if !requireDeleteConfirmation(c, row.Uname, strconv.FormatInt(row.UID, 10), strconv.FormatUint(uint64(row.ID), 10)) {
 		return
 	}
 	if err := db.Delete(&row).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"error": "删除白名单失败: " + err.Error()})
+		respondError(c, http.StatusInternalServerError, "删除白名单失败: "+err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	var remaining int64
+	if err := db.Model(&models.WhitelistUser{}).Where("id = ?", row.ID).Count(&remaining).Error; err != nil || remaining != 0 {
+		respondError(c, http.StatusInternalServerError, "删除结果校验失败")
+		return
+	}
+	respondCreated(c, "删除成功", gin.H{"message": "删除成功", "deleted_id": row.ID})
 }

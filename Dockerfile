@@ -8,7 +8,7 @@ COPY web/ ./
 RUN npm run build
 
 # 多阶段构建 - 构建后端
-FROM golang:1.24-alpine AS backend-builder
+FROM golang:1.25-alpine AS backend-builder
 
 WORKDIR /app
 COPY server/go.mod server/go.sum ./
@@ -43,8 +43,7 @@ RUN mkdir -p /app/data
 
 # 设置环境变量
 ENV PORT=8080
-ENV USERNAME=admin
-ENV PASSWORD=admin123
+ENV GOBAN_USERNAME=admin
 ENV DB_PATH=/app/data/goban.db
 
 # 健康检查

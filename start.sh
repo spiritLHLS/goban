@@ -24,7 +24,8 @@ FRONTEND_PID=$!
 echo "前端PID: $FRONTEND_PID"
 echo ""
 echo "前端地址: http://localhost:3000"
-echo "默认账号: admin / admin123"
+echo "用户名默认: admin"
+echo "未设置 PASSWORD 时，请查看数据目录中的 .goban_admin_password 获取生成密码"
 echo ""
 echo "按 Ctrl+C 停止服务"
 

@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '@/views/Login.vue'
 import Dashboard from '@/views/Dashboard.vue'
+import { getCredentials } from '@/utils/authStorage'
 
 const routes = [
   {
@@ -23,8 +24,7 @@ const router = createRouter({
 
 // 路由守卫
 router.beforeEach((to, from, next) => {
-  const username = localStorage.getItem('username')
-  const password = localStorage.getItem('password')
+  const { username, password } = getCredentials()
   
   if (to.meta.requiresAuth && (!username || !password)) {
     next('/login')

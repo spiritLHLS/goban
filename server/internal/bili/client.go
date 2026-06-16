@@ -1,14 +1,18 @@
 package bili
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"math"
 	"math/rand"
+	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +69,28 @@ type BiliClient struct {
 	RetryInterval int // 重试基础间隔（秒）
 }
 
+type RiskControlError struct {
+	Message string
+}
+
+func (e *RiskControlError) Error() string {
+	return e.Message
+}
+
+func IsRiskControlError(err error) bool {
+	var riskErr *RiskControlError
+	return errors.As(err, &riskErr)
+}
+
+type RateLimitError struct {
+	Message    string
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return e.Message
+}
+
 func NewBiliClient(cookies string, uid int64) *BiliClient {
 	client := req.C().
 		SetTimeout(30 * time.Second).
@@ -116,26 +142,105 @@ func (c *BiliClient) SetRetryPolicy(maxRetries, retryInterval int) {
 }
 
 // retryWithBackoff 使用指数退避策略重试函数
-func (c *BiliClient) retryWithBackoff(operation func() error) error {
+func (c *BiliClient) retryWithBackoff(ctx context.Context, operation func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
 
 	for attempt := 0; attempt <= c.MaxRetries; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		lastErr = operation()
 
 		if lastErr == nil {
 			return nil
+		}
+		if IsRiskControlError(lastErr) {
+			return lastErr
 		}
 
 		if attempt < c.MaxRetries {
 			// 计算退避时间：基础间隔 * 2^尝试次数
 			backoffTime := time.Duration(c.RetryInterval) * time.Second * time.Duration(math.Pow(2, float64(attempt)))
 			backoffTime += time.Duration(rand.Intn(500)) * time.Millisecond
+			var rateErr *RateLimitError
+			if errors.As(lastErr, &rateErr) && rateErr.RetryAfter > 0 {
+				backoffTime = rateErr.RetryAfter
+			}
 			log.Printf("[重试] 第 %d 次尝试失败，%v 后重试: %v", attempt+1, backoffTime, lastErr)
-			time.Sleep(backoffTime)
+			timer := time.NewTimer(backoffTime)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
 		}
 	}
 
 	return fmt.Errorf("重试 %d 次后仍然失败: %w", c.MaxRetries, lastErr)
+}
+
+func responseStatusError(action string, resp *req.Response) error {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		message := fmt.Sprintf("%s: HTTP 429 请求过于频繁", action)
+		retryAfter := retryAfterDuration(resp)
+		if retryAfter > 0 {
+			message += "，建议等待 " + retryAfter.String()
+		}
+		return &RateLimitError{Message: message, RetryAfter: retryAfter}
+	}
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		return &RiskControlError{Message: fmt.Sprintf("%s: HTTP %d，疑似触发B站风控", action, resp.StatusCode)}
+	}
+	return fmt.Errorf("%s: HTTP %d", action, resp.StatusCode)
+}
+
+func retryAfterDuration(resp *req.Response) time.Duration {
+	raw := strings.TrimSpace(resp.Header.Get("Retry-After"))
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		delay := time.Until(when)
+		if delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
+func apiCodeError(action, message string, code int) error {
+	value := fmt.Sprintf("%s: %s (code=%d)", action, message, code)
+	if isRiskControlCode(code) || isRiskControlMessage(message) {
+		return &RiskControlError{Message: value}
+	}
+	return fmt.Errorf("%s", value)
+}
+
+func isRiskControlCode(code int) bool {
+	switch code {
+	case -412, -352:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRiskControlMessage(message string) bool {
+	message = strings.ToLower(message)
+	riskWords := []string{"操作频繁", "访问被拒绝", "验证码", "风控", "安全验证", "请求过于频繁", "rate limit"}
+	for _, word := range riskWords {
+		if strings.Contains(message, strings.ToLower(word)) {
+			return true
+		}
+	}
+	return false
 }
 
 // UserInfoResponse 用户信息响应
@@ -162,7 +267,9 @@ func GetUserInfo(cookies string) (*UserInfoResponse, error) {
 	apiURL := "https://api.bilibili.com/x/space/myinfo"
 
 	var userInfo UserInfoResponse
-	client := req.C().ImpersonateChrome()
+	client := req.C().
+		SetTimeout(30 * time.Second).
+		ImpersonateChrome()
 	resp, err := client.R().
 		SetHeader("Cookie", cookies).
 		Get(apiURL)
@@ -185,16 +292,64 @@ func GetUserInfo(cookies string) (*UserInfoResponse, error) {
 	return &userInfo, nil
 }
 
+type NavResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		IsLogin bool   `json:"isLogin"`
+		Mid     int64  `json:"mid"`
+		Uname   string `json:"uname"`
+	} `json:"data"`
+}
+
+func GetNavInfo(cookies string) (*NavResponse, error) {
+	return GetNavInfoContext(context.Background(), cookies)
+}
+
+func GetNavInfoContext(ctx context.Context, cookies string) (*NavResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	apiURL := "https://api.bilibili.com/x/web-interface/nav"
+
+	var nav NavResponse
+	client := req.C().
+		SetTimeout(30 * time.Second).
+		ImpersonateChrome()
+	resp, err := client.R().
+		SetContext(ctx).
+		SetHeader("Cookie", cookies).
+		SetSuccessResult(&nav).
+		Get(apiURL)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.IsSuccessState() {
+		return nil, responseStatusError("验证Cookie失败", resp)
+	}
+	if nav.Code == -101 {
+		return &nav, nil
+	}
+	if nav.Code != 0 {
+		return nil, apiCodeError("验证Cookie失败", nav.Message, nav.Code)
+	}
+	return &nav, nil
+}
+
 // ValidateCookie 验证Cookie有效性
 func ValidateCookie(cookies string) (bool, error) {
-	_, err := GetUserInfo(cookies)
+	return ValidateCookieContext(context.Background(), cookies)
+}
+
+func ValidateCookieContext(ctx context.Context, cookies string) (bool, error) {
+	nav, err := GetNavInfoContext(ctx, cookies)
 	if err != nil {
 		if strings.Contains(err.Error(), "已失效") {
 			return false, nil
 		}
 		return false, err
 	}
-	return true, nil
+	return nav.Data.IsLogin, nil
 }
 
 // GetCookieValue 获取Cookie值
@@ -242,13 +397,18 @@ type VideoInfo struct {
 
 // GetUserVideos 获取用户投稿视频列表（带重试）
 func (c *BiliClient) GetUserVideos(mid int64, pageSize int) ([]VideoInfo, error) {
+	return c.GetUserVideosContext(context.Background(), mid, pageSize)
+}
+
+func (c *BiliClient) GetUserVideosContext(ctx context.Context, mid int64, pageSize int) ([]VideoInfo, error) {
 	var videos []VideoInfo
 
-	err := c.retryWithBackoff(func() error {
+	err := c.retryWithBackoff(ctx, func() error {
 		apiURL := fmt.Sprintf("https://api.bilibili.com/x/space/wbi/arc/search?mid=%d&ps=%d&pn=1", mid, pageSize)
 
 		var resp VideoListResponse
 		r, err := c.ReqClient.R().
+			SetContext(ctx).
 			SetSuccessResult(&resp).
 			Get(apiURL)
 
@@ -257,11 +417,11 @@ func (c *BiliClient) GetUserVideos(mid int64, pageSize int) ([]VideoInfo, error)
 		}
 
 		if !r.IsSuccessState() {
-			return fmt.Errorf("获取视频列表失败: HTTP %d", r.StatusCode)
+			return responseStatusError("获取视频列表失败", r)
 		}
 
 		if resp.Code != 0 {
-			return fmt.Errorf("获取视频列表失败: %s (code=%d)", resp.Message, resp.Code)
+			return apiCodeError("获取视频列表失败", resp.Message, resp.Code)
 		}
 
 		videos = resp.Data.List.Vlist
@@ -297,6 +457,10 @@ type CommentInfo struct {
 
 // GetVideoComments 获取视频评论（带分页和重试）
 func (c *BiliClient) GetVideoComments(oid int64, pageSize int) ([]CommentInfo, error) {
+	return c.GetVideoCommentsContext(context.Background(), oid, pageSize)
+}
+
+func (c *BiliClient) GetVideoCommentsContext(ctx context.Context, oid int64, pageSize int) ([]CommentInfo, error) {
 	if pageSize <= 0 {
 		return []CommentInfo{}, nil
 	}
@@ -307,7 +471,7 @@ func (c *BiliClient) GetVideoComments(oid int64, pageSize int) ([]CommentInfo, e
 		remaining := pageSize - len(comments)
 		requestSize := min(remaining, 50)
 
-		pageComments, err := c.getVideoCommentsPage(oid, page, requestSize)
+		pageComments, err := c.getVideoCommentsPage(ctx, oid, page, requestSize)
 		if err != nil {
 			return comments, err
 		}
@@ -328,15 +492,16 @@ func (c *BiliClient) GetVideoComments(oid int64, pageSize int) ([]CommentInfo, e
 	return comments, nil
 }
 
-func (c *BiliClient) getVideoCommentsPage(oid int64, page, pageSize int) ([]CommentInfo, error) {
+func (c *BiliClient) getVideoCommentsPage(ctx context.Context, oid int64, page, pageSize int) ([]CommentInfo, error) {
 	var comments []CommentInfo
 
-	err := c.retryWithBackoff(func() error {
+	err := c.retryWithBackoff(ctx, func() error {
 		// type=1 表示视频评论
 		apiURL := fmt.Sprintf("https://api.bilibili.com/x/v2/reply?type=1&oid=%d&ps=%d&pn=%d&sort=2", oid, pageSize, page)
 
 		var resp CommentListResponse
 		r, err := c.ReqClient.R().
+			SetContext(ctx).
 			SetSuccessResult(&resp).
 			Get(apiURL)
 
@@ -345,7 +510,7 @@ func (c *BiliClient) getVideoCommentsPage(oid int64, page, pageSize int) ([]Comm
 		}
 
 		if !r.IsSuccessState() {
-			return fmt.Errorf("获取评论失败: HTTP %d", r.StatusCode)
+			return responseStatusError("获取评论失败", r)
 		}
 
 		if resp.Code != 0 {
@@ -354,7 +519,7 @@ func (c *BiliClient) getVideoCommentsPage(oid int64, page, pageSize int) ([]Comm
 				comments = []CommentInfo{}
 				return nil
 			}
-			return fmt.Errorf("获取评论失败: %s (code=%d)", resp.Message, resp.Code)
+			return apiCodeError("获取评论失败", resp.Message, resp.Code)
 		}
 
 		if resp.Data.Replies == nil {
@@ -386,7 +551,11 @@ type ReportCommentResponse struct {
 
 // ReportComment 举报评论（带重试）
 func (c *BiliClient) ReportComment(oid, rpid int64, reason int) error {
-	return c.retryWithBackoff(func() error {
+	return c.ReportCommentContext(context.Background(), oid, rpid, reason)
+}
+
+func (c *BiliClient) ReportCommentContext(ctx context.Context, oid, rpid int64, reason int) error {
+	return c.retryWithBackoff(ctx, func() error {
 		csrf := GetCookieValue(c.Cookies, "bili_jct")
 		if csrf == "" {
 			return fmt.Errorf("未找到CSRF token (bili_jct)")
@@ -396,6 +565,7 @@ func (c *BiliClient) ReportComment(oid, rpid int64, reason int) error {
 
 		var resp ReportCommentResponse
 		r, err := c.ReqClient.R().
+			SetContext(ctx).
 			SetFormData(map[string]string{
 				"type":   "1",
 				"oid":    fmt.Sprintf("%d", oid),
@@ -411,11 +581,11 @@ func (c *BiliClient) ReportComment(oid, rpid int64, reason int) error {
 		}
 
 		if !r.IsSuccessState() {
-			return fmt.Errorf("举报失败: HTTP %d", r.StatusCode)
+			return responseStatusError("举报失败", r)
 		}
 
 		if resp.Code != 0 {
-			return fmt.Errorf("举报失败: %s (code=%d)", resp.Message, resp.Code)
+			return apiCodeError("举报失败", resp.Message, resp.Code)
 		}
 
 		return nil
@@ -424,9 +594,13 @@ func (c *BiliClient) ReportComment(oid, rpid int64, reason int) error {
 
 // GetUPInfo 获取UP主信息（带重试）
 func (c *BiliClient) GetUPInfo(mid int64) (string, error) {
+	return c.GetUPInfoContext(context.Background(), mid)
+}
+
+func (c *BiliClient) GetUPInfoContext(ctx context.Context, mid int64) (string, error) {
 	var upName string
 
-	err := c.retryWithBackoff(func() error {
+	err := c.retryWithBackoff(ctx, func() error {
 		apiURL := fmt.Sprintf("https://api.bilibili.com/x/space/acc/info?mid=%d", mid)
 
 		var result struct {
@@ -438,6 +612,7 @@ func (c *BiliClient) GetUPInfo(mid int64) (string, error) {
 		}
 
 		r, err := c.ReqClient.R().
+			SetContext(ctx).
 			SetSuccessResult(&result).
 			Get(apiURL)
 
@@ -446,11 +621,11 @@ func (c *BiliClient) GetUPInfo(mid int64) (string, error) {
 		}
 
 		if !r.IsSuccessState() {
-			return fmt.Errorf("获取UP主信息失败: HTTP %d", r.StatusCode)
+			return responseStatusError("获取UP主信息失败", r)
 		}
 
 		if result.Code != 0 {
-			return fmt.Errorf("获取UP主信息失败: %s (code=%d)", result.Msg, result.Code)
+			return apiCodeError("获取UP主信息失败", result.Msg, result.Code)
 		}
 
 		upName = result.Data.Name
@@ -500,7 +675,9 @@ func GenerateWebQRCode() (*QRCodeResponse, error) {
 	apiURL := "https://passport.bilibili.com/qrcode/getLoginUrl"
 
 	var qrResp QRCodeResponse
-	client := req.C().ImpersonateChrome()
+	client := req.C().
+		SetTimeout(30 * time.Second).
+		ImpersonateChrome()
 	resp, err := client.R().
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36").
 		SetHeader("Referer", "https://www.bilibili.com/").
@@ -538,7 +715,9 @@ func GenerateTVQRCode() (*QRCodeResponse, error) {
 		params["appkey"], params["local_id"], params["ts"])
 
 	var qrResp QRCodeResponse
-	client := req.C().ImpersonateChrome()
+	client := req.C().
+		SetTimeout(30 * time.Second).
+		ImpersonateChrome()
 	resp, err := client.R().
 		SetFormDataFromValues(url.Values{
 			"appkey":   {params["appkey"]},
@@ -579,7 +758,9 @@ func PollTVQRCodeStatus(authCode string) (*QRCodePollResponse, error) {
 	log.Println("[TV_POLL] 轮询二维码状态")
 
 	var pollResp QRCodePollResponse
-	client := req.C().ImpersonateChrome()
+	client := req.C().
+		SetTimeout(30 * time.Second).
+		ImpersonateChrome()
 	resp, err := client.R().
 		SetFormDataFromValues(url.Values{
 			"appkey":    {params["appkey"]},
@@ -631,7 +812,9 @@ func PollWebQRCodeStatus(oauthKey string) (*QRCodePollResponse, error) {
 	tokenURL := "https://passport.bilibili.com/qrcode/getLoginInfo"
 
 	var pollResp QRCodePollResponse
-	client := req.C().ImpersonateChrome()
+	client := req.C().
+		SetTimeout(30 * time.Second).
+		ImpersonateChrome()
 	resp, err := client.R().
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36").
 		SetHeader("Host", "passport.bilibili.com").
@@ -690,7 +873,11 @@ func PollWebQRCodeStatus(oauthKey string) (*QRCodePollResponse, error) {
 
 // ExtractCookiesFromWebPollResponse 从Web端轮询响应中提取Cookie
 func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse, client *req.Client) string {
-	if pollResp == nil || pollResp.Data.Code != 0 {
+	if pollResp == nil {
+		log.Printf("[WEB_COOKIE] 登录未完成，跳过Cookie提取 - 响应为空")
+		return ""
+	}
+	if pollResp.Data.Code != 0 {
 		log.Printf("[WEB_COOKIE] 登录未完成，跳过Cookie提取 - code=%d", pollResp.Data.Code)
 		return ""
 	}
@@ -703,26 +890,22 @@ func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse, client *req
 	// Web端登录成功后，URL中包含Cookie参数
 	log.Printf("[WEB_COOKIE] 解析登录URL: %s", pollResp.Data.URL[:min(100, len(pollResp.Data.URL))])
 
-	// 解析URL中的Cookie参数
-	parts := strings.Split(pollResp.Data.URL, "?")
-	if len(parts) < 2 {
+	parsedURL, err := url.Parse(pollResp.Data.URL)
+	if err != nil {
+		log.Printf("[WEB_COOKIE] URL解析失败: %v", err)
+		return ""
+	}
+	params := parsedURL.Query()
+	if len(params) == 0 {
 		log.Printf("[WEB_COOKIE] URL没有查询参数")
 		return ""
 	}
 
-	params := make(map[string]string)
-	for _, param := range strings.Split(parts[1], "&") {
-		kv := strings.SplitN(param, "=", 2)
-		if len(kv) == 2 {
-			params[kv[0]] = kv[1]
-		}
-	}
-
-	dedeUserID := params["DedeUserID"]
-	sessdata := params["SESSDATA"]
-	biliJct := params["bili_jct"]
-	dedeUserIDCkMd5 := params["DedeUserID__ckMd5"]
-	sid := params["sid"]
+	dedeUserID := params.Get("DedeUserID")
+	sessdata := params.Get("SESSDATA")
+	biliJct := params.Get("bili_jct")
+	dedeUserIDCkMd5 := params.Get("DedeUserID__ckMd5")
+	sid := params.Get("sid")
 
 	if dedeUserID == "" || sessdata == "" || biliJct == "" {
 		log.Printf("[WEB_COOKIE] 关键字段缺失 - DedeUserID: %v, SESSDATA: %v, bili_jct: %v",
@@ -752,7 +935,11 @@ func ExtractCookiesFromWebPollResponse(pollResp *QRCodePollResponse, client *req
 
 // ExtractCookiesFromTVPollResponse 从TV端轮询响应中提取Cookie
 func ExtractCookiesFromTVPollResponse(pollResp *QRCodePollResponse) string {
-	if pollResp == nil || pollResp.Data.Code != 0 {
+	if pollResp == nil {
+		log.Printf("[TV_COOKIE] 登录未完成，跳过Cookie提取 - 响应为空")
+		return ""
+	}
+	if pollResp.Data.Code != 0 {
 		log.Printf("[TV_COOKIE] 登录未完成，跳过Cookie提取 - code=%d", pollResp.Data.Code)
 		return ""
 	}
@@ -767,6 +954,11 @@ func ExtractCookiesFromTVPollResponse(pollResp *QRCodePollResponse) string {
 	cookieMap := make(map[string]string)
 	for _, cookie := range pollResp.Data.CookieInfo.Cookies {
 		cookieMap[cookie.Name] = cookie.Value
+	}
+	if cookieMap["DedeUserID"] == "" || cookieMap["SESSDATA"] == "" || cookieMap["bili_jct"] == "" {
+		log.Printf("[TV_COOKIE] 关键字段缺失 - DedeUserID: %v, SESSDATA: %v, bili_jct: %v",
+			cookieMap["DedeUserID"] != "", cookieMap["SESSDATA"] != "", cookieMap["bili_jct"] != "")
+		return ""
 	}
 
 	// 按顺序构建 Cookie（参考gobup项目）

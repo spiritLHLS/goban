@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,7 +32,7 @@ func GetMonitorStatus(c *gin.Context) {
 	var recentTasks []models.MonitorTask
 	db.Preload("Targets").Preload("User").Order("last_check DESC").Limit(10).Find(&recentTasks)
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"now":              time.Now(),
 		"total_tasks":      totalTasks,
 		"enabled_tasks":    enabledTasks,

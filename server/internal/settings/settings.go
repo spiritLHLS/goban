@@ -5,6 +5,7 @@ import (
 
 	"github.com/spiritlhl/goban/internal/database"
 	"github.com/spiritlhl/goban/internal/models"
+	"gorm.io/gorm"
 )
 
 type Values map[string]string
@@ -25,16 +26,18 @@ func All() (Values, error) {
 
 func Save(values Values) error {
 	db := database.GetDB()
-	for key, value := range values {
-		row := models.AppSetting{Key: key}
-		if err := db.FirstOrCreate(&row, models.AppSetting{Key: key}).Error; err != nil {
-			return err
+	return db.Transaction(func(tx *gorm.DB) error {
+		for key, value := range values {
+			row := models.AppSetting{Key: key}
+			if err := tx.FirstOrCreate(&row, models.AppSetting{Key: key}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&row).Update("value", value).Error; err != nil {
+				return err
+			}
 		}
-		if err := db.Model(&row).Update("value", value).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func Get(key, fallback string) string {

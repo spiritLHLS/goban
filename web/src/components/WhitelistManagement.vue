@@ -8,7 +8,7 @@
       </div>
     </div>
 
-    <el-table :data="users" style="width: 100%" v-loading="loading">
+    <el-table :data="users" style="width: 100%" v-loading="loading" :empty-text="loading ? '加载中' : '暂无白名单用户'">
       <el-table-column prop="uid" label="UID" width="140" />
       <el-table-column prop="uname" label="用户名" min-width="160" />
       <el-table-column prop="remark" label="备注" min-width="220" />
@@ -53,8 +53,9 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { whitelistAPI } from '@/api'
+import { buildDeleteConfirmation } from '@/utils/deleteConfirm'
 
 const users = ref([])
 const loading = ref(false)
@@ -127,8 +128,8 @@ const handleSubmit = async () => {
 
 const handleDelete = async (row) => {
   try {
-    await ElMessageBox.confirm('确定删除该白名单吗？', '提示', { type: 'warning' })
-    await whitelistAPI.delete(row.id)
+    const params = await buildDeleteConfirmation(row, '白名单', row.uname || String(row.uid || row.id))
+    await whitelistAPI.delete(row.id, params)
     ElMessage.success('删除成功')
     await loadUsers()
   } catch (error) {

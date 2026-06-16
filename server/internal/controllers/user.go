@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/spiritlhl/goban/internal/secure"
 	"github.com/yeqown/go-qrcode/v2"
 	"github.com/yeqown/go-qrcode/writer/standard"
+	"gorm.io/gorm"
 )
 
 // nopCloser 包装 io.Writer 为 io.WriteCloser
@@ -57,7 +59,7 @@ func ListBiliUsers(c *gin.Context) {
 		Order("created_at DESC").
 		Find(&users)
 
-	c.JSON(http.StatusOK, users)
+	respondOK(c, users)
 }
 
 // LoginUser 生成B站登录二维码
@@ -67,7 +69,7 @@ func LoginUser(c *gin.Context) {
 	qrResp, err := bili.GenerateTVQRCode()
 	if err != nil {
 		log.Printf("生成二维码失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{"error": "生成二维码失败: " + err.Error()})
+		respondError(c, http.StatusBadGateway, "生成二维码失败: "+err.Error())
 		return
 	}
 
@@ -79,7 +81,7 @@ func LoginUser(c *gin.Context) {
 	)
 	if err != nil {
 		log.Printf("创建二维码失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{"error": "创建二维码失败"})
+		respondError(c, http.StatusInternalServerError, "创建二维码失败")
 		return
 	}
 
@@ -91,7 +93,7 @@ func LoginUser(c *gin.Context) {
 	)
 	if err = qrc.Save(stdWriter); err != nil {
 		log.Printf("生成PNG失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{"error": "生成PNG失败"})
+		respondError(c, http.StatusInternalServerError, "生成PNG失败")
 		return
 	}
 
@@ -101,7 +103,7 @@ func LoginUser(c *gin.Context) {
 	// 验证PNG头部
 	if len(pngBytes) < 8 || string(pngBytes[1:4]) != "PNG" {
 		log.Printf("[ERROR] PNG格式无效，头部: %v", pngBytes[:min(8, len(pngBytes))])
-		c.JSON(http.StatusOK, gin.H{"error": "生成的二维码图片格式无效"})
+		respondError(c, http.StatusInternalServerError, "生成的二维码图片格式无效")
 		return
 	}
 
@@ -122,7 +124,7 @@ func LoginUser(c *gin.Context) {
 		Status:     "pending",
 	})
 
-	c.JSON(http.StatusOK, gin.H{
+	respondOK(c, gin.H{
 		"image": imageBase64,
 		"key":   sessionKey,
 	})
@@ -132,7 +134,7 @@ func LoginUser(c *gin.Context) {
 func LoginCheck(c *gin.Context) {
 	sessionKey := c.Query("key")
 	if sessionKey == "" {
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "failed",
 			"message": "缺少session key",
 		})
@@ -141,7 +143,7 @@ func LoginCheck(c *gin.Context) {
 
 	session, exists := getLoginSession(sessionKey)
 	if !exists {
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "failed",
 			"message": "会话不存在",
 		})
@@ -156,7 +158,7 @@ func LoginCheck(c *gin.Context) {
 		session.Status = "expired"
 		session.Message = "二维码已过期"
 		deleteLoginSession(sessionKey)
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "expired",
 			"message": "二维码已过期，请重新获取",
 		})
@@ -167,7 +169,7 @@ func LoginCheck(c *gin.Context) {
 		if session.Status == "success" || session.Status == "failed" {
 			deleteLoginSession(sessionKey)
 		}
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  session.Status,
 			"message": session.Message,
 		})
@@ -178,7 +180,7 @@ func LoginCheck(c *gin.Context) {
 	pollResp, err := bili.PollTVQRCodeStatus(session.AuthCode)
 	if err != nil {
 		log.Printf("[ERROR] 轮询失败: %v", err)
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "pending",
 			"message": "检查中...",
 		})
@@ -196,7 +198,7 @@ func LoginCheck(c *gin.Context) {
 		if cookieStr == "" {
 			session.Status = "failed"
 			session.Message = "获取Cookie失败"
-			c.JSON(http.StatusOK, gin.H{
+			respondOK(c, gin.H{
 				"status":  "failed",
 				"message": "获取Cookie失败",
 			})
@@ -208,7 +210,7 @@ func LoginCheck(c *gin.Context) {
 		if err != nil {
 			session.Status = "failed"
 			session.Message = "获取用户信息失败"
-			c.JSON(http.StatusOK, gin.H{
+			respondOK(c, gin.H{
 				"status":  "failed",
 				"message": "获取用户信息失败: " + err.Error(),
 			})
@@ -219,7 +221,7 @@ func LoginCheck(c *gin.Context) {
 		if err != nil {
 			session.Status = "failed"
 			session.Message = "保存用户失败"
-			c.JSON(http.StatusOK, gin.H{
+			respondOK(c, gin.H{
 				"status":  "failed",
 				"message": "保存用户失败: " + err.Error(),
 			})
@@ -231,7 +233,7 @@ func LoginCheck(c *gin.Context) {
 
 		log.Printf("[INFO] 用户登录成功: UID=%d, Uname=%s", user.UID, user.Uname)
 
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "success",
 			"message": "登录成功",
 		})
@@ -239,25 +241,25 @@ func LoginCheck(c *gin.Context) {
 	case 86038: // 二维码已失效
 		session.Status = "expired"
 		session.Message = "二维码已过期"
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "expired",
 			"message": "二维码已过期，请重新获取",
 		})
 
 	case 86090: // 已扫码未确认
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "scanned",
 			"message": "已扫码，等待确认...",
 		})
 
 	case 86101: // 等待扫码
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "pending",
 			"message": "等待扫码...",
 		})
 
 	default:
-		c.JSON(http.StatusOK, gin.H{
+		respondOK(c, gin.H{
 			"status":  "pending",
 			"message": "检查中...",
 		})
@@ -270,7 +272,7 @@ func LoginCancel(c *gin.Context) {
 	if sessionKey != "" {
 		deleteLoginSession(sessionKey)
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "已取消"})
+	respondCreated(c, "已取消", gin.H{"message": "已取消"})
 }
 
 // LoginByCookie 通过Cookie直接登录
@@ -280,44 +282,44 @@ func LoginByCookie(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"type": "error", "msg": "请求参数错误"})
+		respondError(c, http.StatusBadRequest, "请求参数错误")
 		return
 	}
 
 	cookieStr := strings.TrimSpace(req.Cookies)
 	if cookieStr == "" {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "Cookie不能为空"})
+		respondError(c, http.StatusBadRequest, "Cookie不能为空")
 		return
 	}
 
 	// 验证Cookie
 	valid, err := bili.ValidateCookie(cookieStr)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "验证Cookie失败: " + err.Error()})
+		respondError(c, http.StatusBadGateway, "验证Cookie失败: "+err.Error())
 		return
 	}
 
 	if !valid {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "Cookie已失效或格式错误"})
+		respondError(c, http.StatusUnauthorized, "Cookie已失效或格式错误")
 		return
 	}
 
 	// 获取用户信息
 	userInfo, err := bili.GetUserInfo(cookieStr)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "获取用户信息失败"})
+		respondError(c, http.StatusBadGateway, "获取用户信息失败")
 		return
 	}
 
 	user, err := saveBiliUserWithCookies(cookieStr, userInfo)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "保存用户失败: " + err.Error()})
+		respondError(c, http.StatusInternalServerError, "保存用户失败: "+err.Error())
 		return
 	}
 
 	log.Printf("[INFO] 用户通过Cookie登录成功: UID=%d, Uname=%s", user.UID, user.Uname)
 
-	c.JSON(http.StatusOK, gin.H{
+	respondCreated(c, "登录成功", gin.H{
 		"type": "success",
 		"msg":  "登录成功",
 		"user": user,
@@ -331,21 +333,45 @@ func DeleteBiliUser(c *gin.Context) {
 
 	var user models.BiliUser
 	if err := db.First(&user, id).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "用户不存在"})
+		respondError(c, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if !requireDeleteConfirmation(c, user.Uname, strconv.FormatInt(user.UID, 10)) {
 		return
 	}
 
-	var tasks []models.MonitorTask
-	db.Where("user_id = ?", user.ID).Find(&tasks)
-	for _, task := range tasks {
-		db.Where("task_id = ?", task.ID).Delete(&models.MonitorTarget{})
-		db.Where("task_id = ?", task.ID).Delete(&models.MonitorLog{})
-		db.Where("task_id = ?", task.ID).Delete(&models.ReportRecord{})
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		var tasks []models.MonitorTask
+		if err := tx.Where("user_id = ?", user.ID).Find(&tasks).Error; err != nil {
+			return err
+		}
+		for _, task := range tasks {
+			if err := tx.Where("task_id = ?", task.ID).Delete(&models.MonitorTarget{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("task_id = ?", task.ID).Delete(&models.MonitorLog{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("task_id = ?", task.ID).Delete(&models.ReportRecord{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("user_id = ?", user.ID).Delete(&models.MonitorTask{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&user).Error
+	}); err != nil {
+		respondError(c, http.StatusInternalServerError, "删除失败: "+err.Error())
+		return
 	}
-	db.Where("user_id = ?", user.ID).Delete(&models.MonitorTask{})
-	db.Delete(&user)
 
-	c.JSON(http.StatusOK, gin.H{"type": "success", "msg": "删除成功"})
+	var remaining int64
+	if err := db.Model(&models.BiliUser{}).Where("id = ?", user.ID).Count(&remaining).Error; err != nil || remaining != 0 {
+		respondError(c, http.StatusInternalServerError, "删除结果校验失败")
+		return
+	}
+
+	respondCreated(c, "删除成功", gin.H{"type": "success", "msg": "删除成功", "deleted_id": user.ID})
 }
 
 // CheckBiliUserCookie 手动检测账号Cookie有效性
@@ -353,7 +379,7 @@ func CheckBiliUserCookie(c *gin.Context) {
 	db := database.GetDB()
 	var user models.BiliUser
 	if err := db.First(&user, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "用户不存在"})
+		respondError(c, http.StatusNotFound, "用户不存在")
 		return
 	}
 
@@ -366,7 +392,7 @@ func CheckBiliUserCookie(c *gin.Context) {
 			"cookie_message":    "Cookie解密失败: " + err.Error(),
 			"last_cookie_check": now,
 		})
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "Cookie解密失败"})
+		respondError(c, http.StatusConflict, "Cookie解密失败")
 		return
 	}
 
@@ -378,7 +404,7 @@ func CheckBiliUserCookie(c *gin.Context) {
 		updates["cookie_status"] = "unknown"
 		updates["cookie_message"] = err.Error()
 		db.Model(&user).Updates(updates)
-		c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "检测失败: " + err.Error()})
+		respondError(c, http.StatusBadGateway, "检测失败: "+err.Error())
 		return
 	}
 	if valid {
@@ -386,7 +412,7 @@ func CheckBiliUserCookie(c *gin.Context) {
 		updates["cookie_status"] = "valid"
 		updates["cookie_message"] = "Cookie有效"
 		db.Model(&user).Updates(updates)
-		c.JSON(http.StatusOK, gin.H{"type": "success", "msg": "Cookie有效"})
+		respondOK(c, gin.H{"type": "success", "msg": "Cookie有效"})
 		return
 	}
 
@@ -394,7 +420,7 @@ func CheckBiliUserCookie(c *gin.Context) {
 	updates["cookie_status"] = "invalid"
 	updates["cookie_message"] = "Cookie已失效"
 	db.Model(&user).Updates(updates)
-	c.JSON(http.StatusOK, gin.H{"type": "error", "msg": "Cookie已失效"})
+	respondOK(c, gin.H{"type": "error", "msg": "Cookie已失效"})
 }
 
 func getLoginSession(key string) (*LoginSession, bool) {
