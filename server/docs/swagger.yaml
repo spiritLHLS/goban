@@ -1,0 +1,12 @@
+basePath: /api
+info:
+  contact: {}
+  description: Authenticated API for Bilibili comment monitoring, keyword rules, reports,
+    settings, and account management.
+  title: Goban API
+  version: "1.0"
+paths: {}
+securityDefinitions:
+  BasicAuth:
+    type: basic
+swagger: "2.0"
