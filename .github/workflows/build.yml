@@ -41,10 +41,10 @@ jobs:
         id: date
         run: echo "date=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      - name: Check API documentation
+      - name: Check and auto-fix API documentation
         run: |
           go install github.com/swaggo/swag/cmd/swag@v1.16.6
-          make swagger-check
+          AUTOFIX=true make swagger-check
 
       - name: Create build directory
         run: mkdir -p build
